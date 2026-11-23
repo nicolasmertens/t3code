@@ -11,6 +11,7 @@ import {
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   AuthOrchestrationOperateScope,
+  ProjectId,
   type ScopedThreadRef,
   type ThreadId,
   type ContextMenuSource,
@@ -51,7 +52,11 @@ import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
-import { canTurnThreadIntoProject, useThreadActions } from "./useThreadActions";
+import {
+  canTurnThreadIntoProject,
+  readMoveThreadProjectTargets,
+  useThreadActions,
+} from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
   toastManager.add(
@@ -92,6 +97,7 @@ export function useThreadActionMenu(input: {
     deleteThread,
     markThreadUnread,
     turnThreadIntoProject,
+    moveThreadToProject,
   } = useThreadActions();
   const regenerateThreadTitle = useOrchestrationCommand(threadEnvironment.regenerateTitle, {
     reportFailure: false,
@@ -156,6 +162,7 @@ export function useThreadActionMenu(input: {
         snoozePresets,
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+        moveToProjectTargets: readMoveThreadProjectTargets(threadRef),
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position, source));
       if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -184,6 +191,26 @@ export function useThreadActionMenu(input: {
         const result = await snoozeThread(threadRef, preset.snoozedUntil);
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           failureToast(m(msg("Failed to snooze thread")), squashAtomCommandFailure(result));
+        }
+        return;
+      }
+      if (action.startsWith("move-to-project:")) {
+        const targetProjectId = ProjectId.make(action.slice("move-to-project:".length));
+        const targetProjectName =
+          readMoveThreadProjectTargets(threadRef).find((project) => project.id === targetProjectId)
+            ?.name ?? null;
+        const result = await moveThreadToProject(threadRef, targetProjectId);
+        if (result._tag === "Success") {
+          toastManager.add({
+            type: "success",
+            title: m(msg("Thread moved to project")),
+            description: targetProjectName ?? thread.title,
+          });
+        } else if (!isAtomCommandInterrupted(result)) {
+          failureToast(
+            m(msg("Could not move thread to project")),
+            squashAtomCommandFailure(result),
+          );
         }
         return;
       }

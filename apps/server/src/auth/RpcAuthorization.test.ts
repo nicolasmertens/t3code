@@ -217,6 +217,51 @@ it.effect("allows issue reads but requires a source-control grant before comment
   }).pipe(Effect.scoped),
 );
 
+it.effect("requires orchestration operation to move a thread to another project", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.projectsMoveThread> =>
+          tag !== WS_METHODS.projectsMoveThread,
+      ),
+    );
+    const moved: Array<{ threadId: ThreadId; projectId: ProjectId }> = [];
+    const handlers = group.toLayerHandler(WS_METHODS.projectsMoveThread, (input) =>
+      Effect.sync(() => {
+        moved.push(input);
+        return { projectId: input.projectId };
+      }),
+    );
+    const payload = {
+      threadId: ThreadId.make("thread-move"),
+      projectId: ProjectId.make("project-dest"),
+    };
+    const reader = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(Layer.merge(handlers, RpcAuthorization.layer([AuthOrchestrationReadScope]))),
+    );
+    expect(yield* reader[WS_METHODS.projectsMoveThread](payload).pipe(Effect.flip)).toMatchObject({
+      _tag: "EnvironmentAuthorizationError",
+      requiredPermission: AuthOrchestrationOperateScope,
+    });
+    expect(moved).toEqual([]);
+
+    const writer = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.merge(
+          handlers,
+          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+        ),
+      ),
+    );
+    expect(yield* writer[WS_METHODS.projectsMoveThread](payload)).toEqual({
+      projectId: payload.projectId,
+    });
+    expect(moved).toEqual([payload]);
+  }).pipe(Effect.scoped),
+);
+
 it.effect("reads a linked environment's thread only for a client that may read threads here", () =>
   Effect.gen(function* () {
     const linkedThreadTags = [

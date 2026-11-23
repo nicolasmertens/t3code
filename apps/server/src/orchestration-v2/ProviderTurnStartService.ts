@@ -1019,10 +1019,12 @@ export const layer: Layer.Layer<
         run,
         checkpointScope,
       });
+      const closedNativeThread = providerThread.status === "closed";
       const brokenNativeThread = providerThread.status === "error";
-      // Opened without the broken native id, a session that was not live starts fresh.
+      const skipInitialNativeThread = brokenNativeThread || closedNativeThread;
+      // Opened without the broken or closed native id, a session that was not live starts fresh.
       const opensFreshSession =
-        brokenNativeThread &&
+        skipInitialNativeThread &&
         providerThread.nativeThreadRef !== null &&
         !(yield* providerSessions.isLive(providerSessionId));
       const sessionResult = yield* Effect.result(
@@ -1034,7 +1036,7 @@ export const layer: Layer.Layer<
           ...(existingSessionProjection === undefined
             ? {}
             : { resumeFromSession: existingSessionProjection }),
-          ...(providerThread.nativeThreadRef?.nativeId == null || brokenNativeThread
+          ...(providerThread.nativeThreadRef?.nativeId == null || skipInitialNativeThread
             ? {}
             : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
           ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
@@ -1730,7 +1732,7 @@ export const layer: Layer.Layer<
               handoff.strategy === "manual_context",
           );
         const resumed = yield* Effect.result(
-          uncertainDelivery || nativeSessionLacksKeptTurns || rejectedHistory
+          uncertainDelivery || nativeSessionLacksKeptTurns || rejectedHistory || closedNativeThread
             ? Effect.fail(
                 new ProviderAdapter.ProviderAdapterTurnStartError({
                   driver: session.driver,
@@ -1741,7 +1743,9 @@ export const layer: Layer.Layer<
                     ? "Uncertain native history injection"
                     : nativeSessionLacksKeptTurns
                       ? "Native session holds none of the kept conversation"
-                      : "Rejected native history",
+                      : rejectedHistory
+                        ? "Rejected native history"
+                        : "Native session closed after project move",
                 }),
               )
             : session.resumeThread({
@@ -1808,9 +1812,11 @@ export const layer: Layer.Layer<
               ? "native_session_lacks_kept_turns"
               : rejectedHistory
                 ? "rejected_native_history"
-                : resumed._tag === "Success"
-                  ? "handoff_budget_exhausted"
-                  : "resume_failed",
+                : closedNativeThread
+                  ? "workspace_moved"
+                  : resumed._tag === "Success"
+                    ? "handoff_budget_exhausted"
+                    : "resume_failed",
           errorTag: resumed._tag === "Failure" ? resumed.failure._tag : "ContextHandoffBudgetError",
         });
         const replacement = yield* loadFromProvider(
@@ -1854,6 +1860,16 @@ export const layer: Layer.Layer<
           });
           return undefined;
         }
+        if (
+          closedNativeThread &&
+          effectiveHandoffs.some(
+            (candidate) =>
+              candidate.targetRunId === run.id && candidate.strategy === "full_thread_summary",
+          )
+        ) {
+          resumeFellBack = true;
+          return replacement;
+        }
         const { handoff, transferId, createdAt } = yield* recoveryHandoff;
         const previousRun = projection.runs.findLast(
           (candidate) =>
@@ -1884,7 +1900,7 @@ export const layer: Layer.Layer<
             placement: "run_start",
           }),
           status: "completed",
-          title: "Recovered context",
+          title: closedNativeThread ? "Moved context" : "Recovered context",
           startedAt: createdAt,
           completedAt: createdAt,
           updatedAt: createdAt,

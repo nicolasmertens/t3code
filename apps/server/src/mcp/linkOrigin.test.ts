@@ -34,6 +34,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ThreadProjectMove from "../project/ThreadProjectMove.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -199,7 +200,9 @@ const layerTools = Layer.mergeAll(
       Layer.provide(NodeServices.layer),
     ),
   ),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(
+    Layer.merge(Layer.mock(ThreadProjectMove.ThreadProjectMove)({}), NodeServices.layer),
+  ),
 );
 
 const mcpClient = McpSchema.McpServerClient.of({

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   AuthFilesystemWriteScope,
+  AuthOrchestrationOperateScope,
   EnvironmentId,
   ProjectId,
   ProjectReadFileError,
@@ -48,6 +49,7 @@ const PROJECT = {
 
 const makeHarness = Effect.fn("TestProjectCommands.makeHarness")(function* () {
   const metadataRequests: string[][] = [];
+  const moveRequests: Array<{ threadId: ThreadId; projectId: ProjectId }> = [];
   const file = { byteLength: 5 };
   const readResponse = {
     wait: Effect.void as Effect.Effect<void, ProjectReadFileError>,
@@ -62,6 +64,11 @@ const makeHarness = Effect.fn("TestProjectCommands.makeHarness")(function* () {
     session: yield* SubscriptionRef.make(
       Option.some({
         client: {
+          [WS_METHODS.projectsMoveThread]: (input: { threadId: ThreadId; projectId: ProjectId }) =>
+            Effect.sync(() => {
+              moveRequests.push(input);
+              return { projectId: input.projectId };
+            }),
           [WS_METHODS.projectsEnsureScratch]: () => Effect.succeed({ projectId: PROJECT_ID }),
           [WS_METHODS.projectsReadFile]: () =>
             Effect.gen(function* () {
@@ -143,7 +150,15 @@ const makeHarness = Effect.fn("TestProjectCommands.makeHarness")(function* () {
   const openScratch = Effect.exit(
     commands.openScratch.run(registry, { environmentId: ENVIRONMENT_ID, input: {} }),
   );
-  return { registry, storedProject, openScratch, commands, metadataRequests, readResponse };
+  return {
+    registry,
+    storedProject,
+    openScratch,
+    commands,
+    metadataRequests,
+    moveRequests,
+    readResponse,
+  };
 });
 
 describe("writeFile metadata", () => {
@@ -372,6 +387,52 @@ describe("openScratch", () => {
       registry.set(storedProject, PROJECT);
       const result = yield* Fiber.join(opening);
       expect(result).toMatchObject({ _tag: "Success", value: PROJECT });
+    }),
+  );
+});
+
+describe("moveThread", () => {
+  it.effect("requires operate permission and forwards threadId and projectId", () =>
+    Effect.gen(function* () {
+      const { commands, registry, moveRequests } = yield* makeHarness();
+      const input = {
+        threadId: ThreadId.make("thread-move-1"),
+        projectId: ProjectId.make("project-target"),
+      };
+      const denied = yield* commands.moveThread
+        .run(registry, {
+          environmentId: ENVIRONMENT_ID,
+          input,
+        })
+        .pipe(Effect.flip);
+      expect(denied._tag).toBe("EnvironmentAuthorizationError");
+      expect(moveRequests).toEqual([]);
+
+      registry.set(
+        sessions(ENVIRONMENT_ID),
+        AsyncResult.success({
+          authenticated: true,
+          auth: {
+            policy: "remote-reachable" as const,
+            bootstrapMethods: [],
+            sessionMethods: [],
+            sessionCookieName: "test",
+          },
+          scopes: [AuthOrchestrationOperateScope],
+          permissions: [AuthOrchestrationOperateScope],
+        }),
+      );
+      const moved = yield* Effect.exit(
+        commands.moveThread.run(registry, {
+          environmentId: ENVIRONMENT_ID,
+          input,
+        }),
+      );
+      expect(moved).toMatchObject({
+        _tag: "Success",
+        value: { projectId: input.projectId },
+      });
+      expect(moveRequests).toEqual([input]);
     }),
   );
 });

@@ -52,6 +52,7 @@ import type * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import * as ThreadProjectMove from "../../project/ThreadProjectMove.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
 import * as RemoteDelegation from "../../peer/RemoteDelegation.ts";
@@ -89,6 +90,7 @@ const decodeThreadSearchResult = Schema.decodeUnknownEffect(
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
   Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+  Layer.provide(Layer.mock(ThreadProjectMove.ThreadProjectMove)({})),
   Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
   Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
   Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
@@ -677,6 +679,77 @@ it.effect("rejects an unknown organize target instead of archiving the calling t
   );
 });
 
+it.effect(
+  "t3_thread_organize move_to_project validates projectId and delegates to ThreadProjectMove",
+  () => {
+    const moved: Array<{ threadId: ThreadId; projectId: ProjectId }> = [];
+    return Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const call = (args: Record<string, unknown>) =>
+        server
+          .callTool({ name: "t3_thread_organize", arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+
+      const missingProject = yield* call({ action: "move_to_project" });
+      expect(declaredFailure(missingProject)).toMatchObject({
+        code: "invalid_request",
+        message: "move_to_project requires projectId.",
+      });
+      expect(moved).toEqual([]);
+
+      const movedResult = yield* call({
+        action: "move_to_project",
+        projectId: "project-destination",
+      });
+      expect(movedResult.isError).toBe(false);
+      expect(movedResult.structuredContent).toEqual({
+        projectId: ProjectId.make("project-destination"),
+      });
+      expect(moved).toEqual([
+        {
+          threadId: ThreadId.make("mcp-core-thread"),
+          projectId: ProjectId.make("project-destination"),
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        McpHttpServer.layerThreadToolkit.pipe(
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+              getProjectThreadRecords: ({ threadId: id }) =>
+                Effect.succeed(
+                  McpToolAccessTestkit.idleThreadProjection(
+                    McpToolAccessTestkit.liveThreadShell(id),
+                  ),
+                ),
+            }),
+          ),
+          Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+          Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+          Layer.provide(
+            Layer.mock(ThreadProjectMove.ThreadProjectMove)({
+              move: (input) =>
+                Effect.sync(() => {
+                  moved.push(input);
+                  return { projectId: input.projectId };
+                }),
+            }),
+          ),
+          Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+          Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+          Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+        ),
+      ),
+    );
+  },
+);
+
 it.effect("keeps unexpected handler defects private through the production registration", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -954,6 +1027,7 @@ it.effect("search names the calling thread, so an agent can tell its own match a
           }),
         ),
         Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+        Layer.provide(Layer.mock(ThreadProjectMove.ThreadProjectMove)({})),
         Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
         Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
         Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
@@ -1180,6 +1254,7 @@ it.effect.each([
         Layer.provide(NodeCrypto.layer),
         Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
         Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+        Layer.provide(Layer.mock(ThreadProjectMove.ThreadProjectMove)({})),
         Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
         Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
         Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
@@ -1219,6 +1294,7 @@ it.effect("run_scheduled_task_now reports why a started run failed to dispatch",
         Layer.provide(NodeCrypto.layer),
         Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
         Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+        Layer.provide(Layer.mock(ThreadProjectMove.ThreadProjectMove)({})),
         Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
         Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
         Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),

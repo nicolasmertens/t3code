@@ -28,7 +28,9 @@ import {
   CommandId,
   type GuestMessageId,
   isCompactionCommandMessage,
+  isDelegatedAppThread,
   isDeliveredProviderTurn,
+  isListedThreadLineage,
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   MessageId,
@@ -674,6 +676,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.pull-request.sync":
     case "thread.title.regeneration.complete":
     case "thread.project.adopt-folder":
+    case "thread.project.move":
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
     case "thread.model-selection.set":
@@ -3093,7 +3096,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const providerThread: OrchestrationV2ProviderThread = {
         ...deliveryProviderThread,
         providerSessionId,
-        status: deliveryProviderThread.status === "error" ? "error" : "not_loaded",
+        status:
+          deliveryProviderThread.status === "error" || deliveryProviderThread.status === "closed"
+            ? deliveryProviderThread.status
+            : "not_loaded",
         firstRunOrdinal: queuedProviderThread.firstRunOrdinal ?? ordinal,
         lastRunOrdinal: ordinal,
         handoffIds: appendContextHandoffId(
@@ -6018,6 +6024,162 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  const dispatchThreadProjectMove = Effect.fn("orchestrationV2.dispatch.threadProjectMove")(
+    function* (
+      command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.project.move" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const reject = (cause: string) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} ${cause}`,
+        });
+      const projection = yield* projectionStore
+        .getThreadRecords(
+          command.threadId,
+          ["runs", "runtimeRequests", "providerSessions", "providerThreads"],
+          { turnItemTypes: [], omitSettledSubagentRecords: true },
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const thread = projection.thread;
+      if (thread.deletedAt !== null) return yield* reject("is deleted.");
+      if (!isListedThreadLineage(thread.lineage) || isDelegatedAppThread(thread)) {
+        return yield* reject("cannot move a subagent, side chat, or workflow thread.");
+      }
+      if (threadHasUnfinishedWork(projection)) {
+        return yield* reject("still has work in progress. Finish or stop it first.");
+      }
+      const current = yield* projects.get(thread.projectId).pipe(mapDispatchError(command));
+      const target = yield* projects.get(command.projectId).pipe(mapDispatchError(command));
+      if (Option.isNone(target) || target.value.deletedAt !== null) {
+        return yield* reject(`cannot move to missing project ${command.projectId}.`);
+      }
+      if (target.value.archivedAt !== null) {
+        return yield* reject(`cannot move to archived project ${command.projectId}.`);
+      }
+      if (
+        thread.projectId === command.projectId &&
+        thread.worktreePath === null &&
+        thread.branch === null
+      ) {
+        return;
+      }
+      const liveSessions = projection.providerSessions.filter(
+        (session) => session.status !== "stopped" && session.status !== "error",
+      );
+      for (const session of liveSessions) {
+        if (yield* sessionHasBackgroundWork(session, projection.providerThreads)) {
+          return yield* reject(
+            "still has running background agents or commands. Wait for them to finish, or press Stop, then try again.",
+          );
+        }
+      }
+      const previousCwd =
+        thread.worktreePath ?? Option.getOrUndefined(current)?.workspaceRoot ?? null;
+      const cwdChanged = previousCwd !== target.value.workspaceRoot;
+      const now = yield* DateTime.now;
+      const emitEvent = emit(events, command);
+      yield* emitEvent({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          projectId: command.projectId,
+          worktreePath: null,
+          branch: null,
+          updatedAt: now,
+        },
+      });
+      if (!cwdChanged) {
+        return;
+      }
+      for (const session of liveSessions) {
+        yield* emitEvent({
+          type: "provider-session.detached",
+          threadId: command.threadId,
+          driver: session.driver,
+          providerInstanceId: session.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            providerSessionId: session.id,
+            detachedAt: now,
+            reason: "Moved to another project.",
+          },
+        });
+        const pendingEffect = {
+          id: `effect:${command.commandId}:provider-session.detach:${session.id}`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: {
+            type: "provider-session.detach",
+            providerSessionId: session.id,
+            detail: "Moved to another project.",
+          },
+        } satisfies PendingOrchestrationEffectV2;
+        yield* Ref.update(effects, (existing) => [...existing, pendingEffect]);
+      }
+      // Close native history for the old directory so the next turn starts fresh in the new
+      // project's cwd with a handoff; emit the active provider thread last because ProjectionStore
+      // updates thread.activeProviderThreadId on every provider-thread.updated event.
+      const rootThreadsToClose = projection.providerThreads
+        .filter(
+          (providerThread) =>
+            providerThread.ownerNodeId === null &&
+            providerThread.appThreadId === thread.id &&
+            providerThread.nativeThreadRef !== null &&
+            providerThread.status !== "closed",
+        )
+        .toSorted((left, right) => {
+          if (left.id === thread.activeProviderThreadId) return 1;
+          if (right.id === thread.activeProviderThreadId) return -1;
+          return 0;
+        });
+      for (const providerThread of rootThreadsToClose) {
+        yield* emitEvent({
+          type: "provider-thread.updated",
+          threadId: command.threadId,
+          driver: providerThread.driver,
+          providerInstanceId: providerThread.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...providerThread,
+            providerSessionId: null,
+            status: "closed",
+            updatedAt: now,
+          },
+        });
+      }
+      const activeProviderThread =
+        thread.activeProviderThreadId === null
+          ? undefined
+          : projection.providerThreads.find(
+              (providerThread) => providerThread.id === thread.activeProviderThreadId,
+            );
+      if (
+        rootThreadsToClose.length > 0 &&
+        activeProviderThread !== undefined &&
+        !rootThreadsToClose.some((providerThread) => providerThread.id === activeProviderThread.id)
+      ) {
+        yield* emitEvent({
+          type: "provider-thread.updated",
+          threadId: command.threadId,
+          driver: activeProviderThread.driver,
+          providerInstanceId: activeProviderThread.providerInstanceId,
+          occurredAt: now,
+          payload: activeProviderThread,
+        });
+      }
+    },
+  );
+
   // A turn keeps the modes it started with, so a thread lowered since can hold a broader one.
   // A turn that recorded none is taken as unrestricted.
   const turnStartedModes = (
@@ -8571,6 +8733,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const canResumeAcrossInstances =
       !freshContext &&
       isProviderSwitch &&
+      activeProviderThread.status !== "closed" &&
       activeProviderThread.nativeThreadRef !== null &&
       providerSwitchPlan?.transition.type === "restart_and_resume";
     const releasableSessions = uniqueSessions([
@@ -9276,6 +9439,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const providerSwitchNeedsFullContext =
       targetProviderThread === undefined ||
       targetProviderThread.nativeThreadRef === null ||
+      targetProviderThread.status === "closed" ||
       requiresFullProviderSwitchContext;
     const providerSwitchItems =
       providerSwitchCoveredRuns.length === 0
@@ -9371,7 +9535,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : null;
     const providerThread: OrchestrationV2ProviderThread = {
       ...ensuredProviderThread,
-      status: ensuredProviderThread.status === "error" ? "error" : "active",
+      status:
+        ensuredProviderThread.status === "error" || ensuredProviderThread.status === "closed"
+          ? ensuredProviderThread.status
+          : "active",
       firstRunOrdinal: ensuredProviderThread.firstRunOrdinal ?? ordinal,
       lastRunOrdinal: ordinal,
       handoffIds: [
@@ -16169,6 +16336,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.project.adopt-folder":
         yield* dispatchThreadProjectAdoptFolder(command, events);
         break;
+      case "thread.project.move":
+        yield* dispatchThreadProjectMove(command, events, effects);
+        break;
       case "message.dispatch": {
         const thread = yield* refuseNativeSubagentMessage(command);
         const guestSend =
@@ -16538,6 +16708,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "subagent.stop" ||
           // Closing a share again, or after it ended, is not an error.
           command.type === "thread.guest-share.close" ||
+          command.type === "thread.project.move" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>
           new OrchestratorDispatchError({

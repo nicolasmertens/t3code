@@ -13,6 +13,7 @@ import {
   AuthSourceControlWriteScope,
   EnvironmentAuthorizationError,
   EnvironmentId,
+  ProjectId,
   type ScopedThreadRef,
   ThreadId,
   sessionGrantsScope,
@@ -29,7 +30,11 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { environmentSession, readEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import {
+  isScratchProject,
+  selectMoveTargetProjects,
+  type MoveTargetProject,
+} from "@t3tools/client-runtime/state/projects";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { projectEnvironment } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
@@ -46,6 +51,7 @@ import {
   readEnvironmentSupportsAutoSettleOptOut,
   readEnvironmentThreadRefs,
   readProject,
+  readProjects,
   readThreadShell,
   readThreadShells,
 } from "../state/entities";
@@ -287,6 +293,20 @@ export function canTurnThreadIntoProject(threadRef: ScopedThreadRef): boolean {
   return project !== null && isScratchProject(project, config.scratchWorkspaceRoot);
 }
 
+/** Active non-scratch projects in the same environment this thread can move into. */
+export function readMoveThreadProjectTargets(
+  threadRef: ScopedThreadRef,
+): ReadonlyArray<MoveTargetProject> {
+  const thread = readThreadShell(threadRef);
+  const config = appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId);
+  return selectMoveTargetProjects({
+    thread,
+    projects: readProjects(),
+    scratchWorkspaceRoot: config?.scratchWorkspaceRoot,
+    supported: config?.environment.capabilities.threadProjectMove === true,
+  });
+}
+
 function threadOperationFailure(target: ScopedThreadRef) {
   return readEnvironmentScope(target.environmentId, AuthOrchestrationOperateScope)
     ? null
@@ -339,6 +359,9 @@ export function useThreadActions() {
   });
   const markThreadUnread = useMarkThreadUnread();
   const createProjectFromThread = useAtomCommand(projectEnvironment.createFromThread, {
+    reportFailure: false,
+  });
+  const moveThreadToProject = useAtomCommand(projectEnvironment.moveThread, {
     reportFailure: false,
   });
   const stopThreadSession = useOrchestrationCommand(threadEnvironment.stopSession);
@@ -1065,6 +1088,11 @@ export function useThreadActions() {
       createProjectFromThread({
         environmentId: target.environmentId,
         input: { threadId: target.threadId },
+      }),
+    moveThreadToProject: (target: ScopedThreadRef, projectId: ProjectId) =>
+      moveThreadToProject({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, projectId },
       }),
   };
 }

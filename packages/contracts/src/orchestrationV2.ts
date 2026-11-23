@@ -3870,6 +3870,13 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     projectId: ProjectId,
   }),
+  /** Moves an idle listed thread to another project's root checkout, detaching live provider sessions. */
+  Schema.Struct({
+    type: Schema.Literal("thread.project.move"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    projectId: ProjectId,
+  }),
   /**
    * After a push, the thread's watches forget whether their checks were running, since the push
    * can start new ones. Applied to the watches as they are then, so no earlier read overwrites them.

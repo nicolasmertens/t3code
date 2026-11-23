@@ -149,6 +149,38 @@ describe("layoutThreadListV2RowMenuActions", () => {
     });
     expect(slim.at(-1)?.subactions?.[0]?.id).toBe("arrange");
   });
+
+  it("preserves move-to-project target subactions in flat and nested layouts", () => {
+    const moveAction: MenuAction = {
+      id: "move-to-project",
+      title: "Move to project",
+      subactions: [
+        { id: "move-to-project:proj-a", title: "Alpha" },
+        { id: "move-to-project:proj-b", title: "Beta" },
+      ],
+    };
+    const flat = layoutThreadListV2RowMenuActions({
+      nested: false,
+      direct: [],
+      reorder: [],
+      pin: [],
+      secondary: [moveAction],
+    });
+    const nested = layoutThreadListV2RowMenuActions({
+      nested: true,
+      direct: [],
+      reorder: [],
+      pin: [],
+      secondary: [moveAction],
+    });
+
+    expect(flat.find((action) => action.id === "move-to-project")?.subactions).toEqual(
+      moveAction.subactions,
+    );
+    expect(
+      nested.at(-1)?.subactions?.find((action) => action.id === "move-to-project")?.subactions,
+    ).toEqual(moveAction.subactions);
+  });
 });
 
 describe("resolveThreadListV2Status", () => {

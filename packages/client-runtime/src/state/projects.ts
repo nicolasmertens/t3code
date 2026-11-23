@@ -6,6 +6,14 @@ import {
   normalizeProjectPathForComparison,
   normalizeProjectPathForDispatch,
 } from "@t3tools/shared/path";
+import {
+  isListedThreadLineage,
+  type EnvironmentId,
+  type OrchestrationV2AppThreadLineage,
+  type OrchestrationV2ThreadShell,
+  type ProjectId,
+} from "@t3tools/contracts";
+import type { EnvironmentProject } from "./models.ts";
 
 export { normalizeProjectPathForComparison };
 
@@ -203,6 +211,59 @@ export function getBrowseParentPath(currentPath: string): string | null {
 
 export function canNavigateUp(currentPath: string): boolean {
   return hasTrailingPathSeparator(currentPath) && getBrowseParentPath(currentPath) !== null;
+}
+
+export interface MoveTargetProject {
+  readonly id: ProjectId;
+  readonly name: string;
+}
+
+/**
+ * List active non-scratch projects in the same environment that a listed
+ * non-delegated thread can move into, with pinned projects first.
+ */
+export function selectMoveTargetProjects(input: {
+  readonly thread:
+    | {
+        readonly environmentId: EnvironmentId;
+        readonly projectId: ProjectId;
+        readonly lineage: OrchestrationV2AppThreadLineage;
+        readonly delegatedFrom?: OrchestrationV2ThreadShell["delegatedFrom"] | null;
+      }
+    | null
+    | undefined;
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly scratchWorkspaceRoot: string | null | undefined;
+  readonly supported: boolean;
+}): ReadonlyArray<MoveTargetProject> {
+  const { thread, projects, scratchWorkspaceRoot, supported } = input;
+  if (!supported || !thread) {
+    return [];
+  }
+  if (
+    !isListedThreadLineage(thread.lineage) ||
+    thread.lineage.relationshipToParent === "subagent" ||
+    thread.delegatedFrom != null
+  ) {
+    return [];
+  }
+  return projects
+    .filter(
+      (project) =>
+        project.environmentId === thread.environmentId &&
+        project.id !== thread.projectId &&
+        project.archivedAt == null &&
+        !isScratchProject(project, scratchWorkspaceRoot),
+    )
+    .sort((left, right) => {
+      const leftPinned = left.pinnedAt != null;
+      const rightPinned = right.pinnedAt != null;
+      if (leftPinned !== rightPinned) {
+        return leftPinned ? -1 : 1;
+      }
+      return left.title.localeCompare(right.title);
+    })
+    .map((project) => ({ id: project.id, name: project.title }));
 }
 
 export * from "./projectCommands.ts";

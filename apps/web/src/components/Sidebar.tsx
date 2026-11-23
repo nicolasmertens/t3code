@@ -127,6 +127,7 @@ import {
 } from "../threadSelectionStore";
 import {
   canTurnThreadIntoProject,
+  readMoveThreadProjectTargets,
   useAcknowledgeThreadWoke,
   useThreadActions,
 } from "../hooks/useThreadActions";
@@ -950,6 +951,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     confirmAndUnpinThread,
     setThreadAutoSettle,
     turnThreadIntoProject,
+    moveThreadToProject,
     reorderPinnedThread,
     reorderActiveThread,
     markThreadUnread,
@@ -2728,6 +2730,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
               canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+              moveToProjectTargets: readMoveThreadProjectTargets(threadRef),
               canRename: !fromSearch,
               supports: {
                 settlement: configLoaded,
@@ -2755,6 +2758,31 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   thread.environmentId,
                 );
           if (preset) attemptSnooze(threadRef, preset);
+          return;
+        }
+        if (clicked.value?.startsWith("move-to-project:")) {
+          const targetProjectId = ProjectId.make(clicked.value.slice("move-to-project:".length));
+          const targetProjectName =
+            readMoveThreadProjectTargets(threadRef).find(
+              (project) => project.id === targetProjectId,
+            )?.name ?? null;
+          const result = await moveThreadToProject(threadRef, targetProjectId);
+          if (result._tag === "Success") {
+            toastManager.add({
+              type: "success",
+              title: gt("Thread moved to project"),
+              description: targetProjectName ?? thread.title,
+            });
+          } else if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: gt("Could not move thread to project"),
+                description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+              }),
+            );
+          }
           return;
         }
         switch (clicked.value) {

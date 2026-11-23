@@ -97,6 +97,7 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
+import * as ThreadProjectMove from "./project/ThreadProjectMove.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as McpSignIn from "./mcpApps/McpSignIn.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
@@ -971,6 +972,9 @@ it.live.each([
           namedProjectsRoot: process.cwd(),
         }),
         Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+        Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+        Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+        Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
         Layer.mock(ProviderRegistry.ProviderRegistry)({}),
         Layer.mock(UsageLimitSources.UsageLimitSources)({}),
         Layer.mock(ExternalLauncher.ExternalLauncher)({}),
@@ -1114,6 +1118,9 @@ it.effect.each([
           namedProjectsRoot: process.cwd(),
         }),
         Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+        Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+        Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+        Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
         Layer.mock(ServerEnvironment.ServerEnvironment)({
           getDescriptor: Effect.succeed({
             environmentId: EnvironmentId.make("config-test"),
@@ -1338,6 +1345,10 @@ it.effect("access changes made while the snapshot loads reach the client after i
                 namedProjectsRoot: "/unused",
               }),
               Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+              Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+              Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+              Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+              Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
               Layer.mock(ServerEnvironment.ServerEnvironment)({}),
               Layer.mock(EnvironmentAuth.EnvironmentAuth)({
                 listPairingLinks: () => Effect.succeed([]),
@@ -1495,6 +1506,8 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
         namedProjectsRoot: process.cwd(),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({
         getDescriptor: Effect.succeed({
           environmentId: EnvironmentId.make("config-test"),
@@ -1874,6 +1887,8 @@ it.effect("a missing thread worktree gets its project's skills in the cwd snapsh
         namedProjectsRoot: process.cwd(),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     );
@@ -1960,6 +1975,8 @@ it.effect("a git action that fails partway still refreshes the repository status
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     );
@@ -2040,6 +2057,8 @@ it.effect("a publish whose push fails still refreshes the new remote", () =>
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     );
@@ -2540,6 +2559,8 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
+      Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
       Layer.mock(ProjectService.ProjectService)({
@@ -2714,6 +2735,7 @@ const makeWorkflowClient = Effect.fn("test.makeWorkflowClient")(function* (
     Layer.mock(DirectEndpoints.DirectEndpoints)({}),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
     Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+    Layer.mock(ThreadProjectMove.ThreadProjectMove)({}),
     Layer.mock(ServerEnvironment.ServerEnvironment)({}),
     Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     Layer.mock(Workflows.Workflows)({

@@ -27,6 +27,7 @@ import {
 } from "@t3tools/client-runtime/state/models";
 import {
   AuthOrchestrationOperateScope,
+  ProjectId,
   type EnvironmentId,
   type EnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -74,6 +75,7 @@ import { useSwipeRowDormant } from "../home/swipe-row-activation";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import { canTurnThreadIntoProject, turnThreadIntoProject } from "./turnThreadIntoProject";
+import { moveThreadToProject, useMoveThreadProjectTargets } from "./moveThreadToProject";
 import { threadCanArchive } from "../home/threadArchive";
 import { useCanShareWithGuest } from "./useCanShareWithGuest";
 import {
@@ -1060,6 +1062,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [gt, props.autoSettleOptOutSupported, thread.autoSettleDisabledAt],
   );
   const canTurnIntoProject = canTurnThreadIntoProject(thread);
+  const moveProjectTargets = useMoveThreadProjectTargets(thread);
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
       {
@@ -1087,9 +1090,25 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             } satisfies MenuAction,
           ]
         : []),
+      ...(moveProjectTargets.length > 0
+        ? [
+            {
+              id: "move-to-project",
+              title: gt("Move to project"),
+              image: "folder",
+              attributes: { disabled: !threadCanArchive(thread.runtime) },
+              subactions: moveProjectTargets.map((project) => ({
+                id: `move-to-project:${project.id}`,
+                title: project.name,
+                attributes: { disabled: !threadCanArchive(thread.runtime) },
+              })),
+            } satisfies MenuAction,
+          ]
+        : []),
     ],
     [
       canTurnIntoProject,
+      moveProjectTargets,
       gt,
       m,
       props.titleRegenerationSupported,
@@ -1225,6 +1244,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "turn-into-project") void turnThreadIntoProject(thread);
+      if (nativeEvent.event.startsWith("move-to-project:")) {
+        void moveThreadToProject(
+          thread,
+          ProjectId.make(nativeEvent.event.slice("move-to-project:".length)),
+        );
+      }
       if (nativeEvent.event === "mark-unread") {
         void markThreadUnread({
           environmentId: thread.environmentId,

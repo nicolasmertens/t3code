@@ -1368,7 +1368,9 @@ function makeLocalCommandHarness(input: {
             }),
         }),
         IdAllocator.layer,
-        Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
+        Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({
+          allocate: () => Effect.succeed(1),
+        }),
         Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
           runForThread: input.runSetup ?? (() => Effect.succeed({ status: "no-script" })),
         }),
@@ -1420,6 +1422,7 @@ function makeLocalCommandHarness(input: {
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
           open,
+          isLive: () => Effect.succeed(false),
           get: () =>
             Effect.succeed(
               input.previousTurn?.liveSession === false
@@ -3587,4 +3590,175 @@ effectIt.effect("rejects citation expansion before opening a provider session", 
     ]);
     expect(harness.projection().messages[0]?.text).toBe(text);
   }),
+);
+
+effectIt.effect(
+  "opens a fresh session with Moved context when starting on a closed native thread",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue in the new project",
+        previousTurn: {
+          runStatus: "completed",
+          turnStatus: "completed",
+          liveSession: false,
+        },
+      });
+      const current = harness.projection();
+      const closedThread = {
+        ...current.providerThreads[0]!,
+        status: "closed" as const,
+      };
+      harness.setProjection({
+        ...current,
+        providerThreads: [closedThread],
+      });
+      const replacementThread = {
+        ...closedThread,
+        nativeThreadRef: {
+          driver: closedThread.driver,
+          nativeId: "moved-native-conversation",
+          strength: "strong" as const,
+        },
+      };
+      const resumeThread = vi.fn(() => Effect.succeed(closedThread));
+      const ensureThread = vi.fn(() => Effect.succeed(replacementThread));
+      harness.open.mockImplementationOnce(() =>
+        Effect.succeed({
+          driver: closedThread.driver,
+          providerSession: {
+            id: ProviderSessionId.make("moved-provider-session"),
+            driver: closedThread.driver,
+            providerInstanceId: harness.newInstanceId,
+            status: "ready",
+            cwd: "/tmp/moved-project",
+            model: null,
+            capabilities: CodexProviderCapabilitiesV2,
+            createdAt: current.updatedAt,
+            updatedAt: current.updatedAt,
+            lastError: null,
+          },
+          ensureThread,
+          resumeThread,
+        } as never),
+      );
+      harness.prepareProviderHandoff.mockImplementationOnce((handoff) =>
+        Effect.succeed({
+          ...handoff,
+          id: ContextHandoffId.make("moved-context-handoff"),
+          createdByProviderInstanceId: handoff.toProviderInstanceId,
+          status: "ready" as const,
+          summaryMessageId: null,
+          summaryText: "MOVED_CONTEXT_SUMMARY",
+          updatedAt: handoff.createdAt,
+        }),
+      );
+
+      yield* harness.start;
+
+      expect(harness.open).toHaveBeenCalledTimes(1);
+      expect(
+        (harness.open.mock.calls as ReadonlyArray<ReadonlyArray<unknown>>)[0]?.[0],
+      ).not.toHaveProperty("initialNativeThreadId");
+      expect(resumeThread).not.toHaveBeenCalled();
+      expect(ensureThread).toHaveBeenCalledTimes(1);
+      expect(harness.prepareProviderHandoff).toHaveBeenCalledTimes(1);
+      expect(harness.projection().providerThreads[0]).toMatchObject({
+        id: closedThread.id,
+        status: "active",
+        nativeThreadRef: {
+          nativeId: "moved-native-conversation",
+        },
+      });
+      expect(harness.projection().turnItems).toContainEqual(
+        expect.objectContaining({
+          type: "handoff",
+          title: "Moved context",
+          summary: "MOVED_CONTEXT_SUMMARY",
+        }),
+      );
+    }),
+);
+
+effectIt.effect(
+  "skips duplicate Moved context recovery when a closed thread already has a full_thread_summary handoff",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue on a different provider",
+        previousTurn: {
+          runStatus: "completed",
+          turnStatus: "completed",
+          liveSession: false,
+        },
+      });
+      const current = harness.projection();
+      const targetRun = current.runs.at(-1)!;
+      const closedThread = {
+        ...current.providerThreads[0]!,
+        status: "closed" as const,
+      };
+      harness.setProjection({
+        ...current,
+        providerThreads: [closedThread],
+        contextHandoffs: [
+          {
+            id: ContextHandoffId.make("provider-switch-handoff"),
+            transferId: ContextTransferId.make("provider-switch-transfer"),
+            threadId: current.thread.id,
+            targetRunId: targetRun.id,
+            fromProviderThreadIds: [],
+            toProviderThreadId: closedThread.id,
+            coveredRunOrdinals: { from: 1, to: 1 },
+            strategy: "full_thread_summary",
+            status: "ready",
+            summaryMessageId: null,
+            summaryText: "PROVIDER_SWITCH_SUMMARY",
+            createdByProviderInstanceId: harness.newInstanceId,
+            createdAt: current.updatedAt,
+            updatedAt: current.updatedAt,
+          },
+        ],
+      });
+      const replacementThread = {
+        ...closedThread,
+        nativeThreadRef: {
+          driver: closedThread.driver,
+          nativeId: "moved-switched-native-conversation",
+          strength: "strong" as const,
+        },
+      };
+      const resumeThread = vi.fn(() => Effect.succeed(closedThread));
+      const ensureThread = vi.fn(() => Effect.succeed(replacementThread));
+      harness.open.mockImplementationOnce(() =>
+        Effect.succeed({
+          driver: closedThread.driver,
+          providerSession: {
+            id: ProviderSessionId.make("moved-switched-provider-session"),
+            driver: closedThread.driver,
+            providerInstanceId: harness.newInstanceId,
+            status: "ready",
+            cwd: "/tmp/moved-project",
+            model: null,
+            capabilities: CodexProviderCapabilitiesV2,
+            createdAt: current.updatedAt,
+            updatedAt: current.updatedAt,
+            lastError: null,
+          },
+          ensureThread,
+          resumeThread,
+        } as never),
+      );
+
+      yield* harness.start;
+
+      expect(resumeThread).not.toHaveBeenCalled();
+      expect(ensureThread).toHaveBeenCalledTimes(1);
+      expect(harness.prepareProviderHandoff).not.toHaveBeenCalled();
+      expect(harness.projection().providerThreads[0]).toMatchObject({
+        id: closedThread.id,
+        status: "active",
+      });
+      expect(harness.projection().turnItems.filter((item) => item.type === "handoff")).toEqual([]);
+    }),
 );

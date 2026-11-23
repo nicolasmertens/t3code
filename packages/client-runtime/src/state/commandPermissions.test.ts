@@ -632,3 +632,18 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
     expect(writes).toBe(0);
   }),
 );
+
+it.effect("requires orchestration operation scope to move a thread to another project", () =>
+  Effect.gen(function* () {
+    const registry = yield* setup;
+    const move = createCommandPermissions(runtime, WS_METHODS.projectsMoveThread);
+    registry.set(sessions(env), AsyncResult.success(grant(false)));
+    expect(registry.get(move.permissionAtom(env))).toBe(false);
+    expect((yield* move.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    registry.set(sessions(env), AsyncResult.success(grant(true)));
+    expect(registry.get(move.permissionAtom(env))).toBe(true);
+    yield* move.authorize(registry, env);
+  }),
+);
