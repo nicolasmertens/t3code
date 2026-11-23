@@ -24,13 +24,21 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { __setClientSettingsForTests, getClientSettings } from "../hooks/useSettings";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
-import { useProjects, useServerConfigs, useQuietThreadShells } from "../state/entities";
+import {
+  readEnvironmentServerConfigLoaded,
+  readThreadShell,
+  useProjects,
+  useServerConfigs,
+  useQuietThreadShells,
+} from "../state/entities";
 import { useConnectedEnvironmentIds, usePrimaryEnvironmentId } from "../state/environments";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { readLocalApi } from "../localApi";
 import type { Project } from "../types";
+import { useThreadSelectionStore } from "../threadSelectionStore";
+import { AsyncResult } from "effect/reactivity";
 import Sidebar from "./Sidebar";
 import { THREAD_JUMP_HINT_SHOW_DELAY_MS } from "./Sidebar.logic";
 import { SortableThreadRow } from "./sidebar/SidebarThreadRow";
@@ -572,5 +580,384 @@ describe("sidebar settled pagination", () => {
     const loadedRows = screen.container.querySelectorAll("[data-thread-item]").length;
     await act(() => moreButton.click());
     expect(screen.container.querySelectorAll("[data-thread-item]")).toHaveLength(loadedRows);
+  });
+});
+
+function setupScratchEnvironment(stack: DisposableStack, scratchWorkspaceRoot = "/scratch") {
+  const local = EnvironmentId.make("local");
+  const prevServerConfigs = vi.mocked(useServerConfigs).getMockImplementation();
+  const prevConnected = vi.mocked(useConnectedEnvironmentIds).getMockImplementation();
+  const prevPrimary = vi.mocked(usePrimaryEnvironmentId).getMockImplementation();
+  const prevProjects = vi.mocked(useProjects).getMockImplementation();
+  const prevThreads = vi.mocked(useQuietThreadShells).getMockImplementation();
+  const prevRouteTarget = vi.mocked(useThreadRouteTarget).getMockImplementation();
+  const prevNewThread = vi.mocked(useHandleNewThread).getMockImplementation();
+
+  stack.defer(() => {
+    if (prevServerConfigs) vi.mocked(useServerConfigs).mockImplementation(prevServerConfigs);
+    if (prevConnected) vi.mocked(useConnectedEnvironmentIds).mockImplementation(prevConnected);
+    if (prevPrimary) vi.mocked(usePrimaryEnvironmentId).mockImplementation(prevPrimary);
+    if (prevProjects) vi.mocked(useProjects).mockImplementation(prevProjects);
+    if (prevThreads) vi.mocked(useQuietThreadShells).mockImplementation(prevThreads);
+    if (prevRouteTarget) vi.mocked(useThreadRouteTarget).mockImplementation(prevRouteTarget);
+    if (prevNewThread) vi.mocked(useHandleNewThread).mockImplementation(prevNewThread);
+  });
+
+  const activeProject = project("active");
+  const scratchProject: Project = {
+    ...project("scratch"),
+    title: "No project",
+    workspaceRoot: scratchWorkspaceRoot,
+  };
+  vi.mocked(useProjects).mockReturnValue([activeProject, scratchProject]);
+  vi.mocked(usePrimaryEnvironmentId).mockReturnValue(local);
+  vi.mocked(useConnectedEnvironmentIds).mockReturnValue([local]);
+  vi.mocked(useServerConfigs).mockReturnValue(
+    new Map([
+      [
+        local,
+        {
+          scratchWorkspaceRoot,
+          shellThreadFamilies: false,
+          environment: { capabilities: {} },
+        } as unknown as EnvironmentServerConfig,
+      ],
+    ]),
+  );
+
+  return { local, activeProject, scratchProject };
+}
+
+function workingThreadShell(projectId: ProjectId, index: number): EnvironmentThreadShell {
+  return makeThreadFixture({
+    environmentId: EnvironmentId.make("local"),
+    id: ThreadId.make(`working-${index}`),
+    projectId,
+    title: `Working ${index}`,
+    runtime: {
+      status: "running",
+      activeRunId: null,
+      providerInstanceId: "codex" as never,
+      providerName: "Codex",
+      lastError: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  });
+}
+
+describe("sidebar inbox-zero No project placeholder", () => {
+  it("opens a No project draft when clicking empty space above Working, ignores shelf clicks, and clears selection first", async () => {
+    using stack = new DisposableStack();
+    const style = document.createElement("style");
+    style.textContent = appCss;
+    document.head.append(style);
+    stack.defer(() => style.remove());
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, sidebarWorkingShelfEnabled: true });
+    const previousWorkingExpanded = localStorage.getItem("t3code:sidebar:working-expanded");
+    stack.defer(() => {
+      if (previousWorkingExpanded === null) {
+        localStorage.removeItem("t3code:sidebar:working-expanded");
+      } else {
+        localStorage.setItem("t3code:sidebar:working-expanded", previousWorkingExpanded);
+      }
+    });
+    stack.defer(() => useThreadSelectionStore.getState().clearSelection());
+
+    const { local, activeProject, scratchProject } = setupScratchEnvironment(stack);
+    const workingThread = workingThreadShell(activeProject.id, 0);
+    const routeThreadRef = scopeThreadRef(local, workingThread.id);
+    const startThread = vi.fn().mockResolvedValue({
+      draftId: DraftId.make("scratch-draft"),
+      threadId: ThreadId.make("scratch-thread"),
+    });
+
+    vi.mocked(useQuietThreadShells).mockReturnValue([workingThread]);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef: routeThreadRef });
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: workingThread,
+      defaultProjectRef: scopeProjectRef(activeProject.environmentId, activeProject.id),
+      defaultProjectFallbackReady: true,
+      handleNewThread: startThread,
+      routeDraftId: null,
+      routeThreadRef,
+    });
+
+    await using screen = await render(
+      <SidebarProvider style={{ height: 480, minHeight: 480 }}>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+      { router: "/local/working-0" },
+    );
+
+    const workingHeader = screen.container.querySelector<HTMLElement>(
+      '[data-testid="sidebar-working-header"]',
+    )!;
+    const sidebarContent = screen.container.querySelector<HTMLElement>(
+      '[data-slot="sidebar-content"]',
+    )!;
+    await expect.element(workingHeader).toBeInTheDocument();
+
+    // Clicking the Working header or working thread row must not open a No project draft.
+    await userEvent.click(workingHeader.querySelector("button")!);
+    const workingRow = screen.getByText("Working 0").first().element();
+    await userEvent.click(workingRow);
+    expect(startThread).not.toHaveBeenCalled();
+
+    const headerRect = workingHeader.getBoundingClientRect();
+    const contentRect = sidebarContent.getBoundingClientRect();
+    expect(headerRect.top - contentRect.top).toBeGreaterThan(40);
+    const emptyY = contentRect.top + 20;
+    const emptyX = contentRect.left + contentRect.width / 2;
+
+    // With multi-selection active, clicking empty space clears selection first.
+    await act(() => useThreadSelectionStore.getState().toggleThread(`local:${workingThread.id}`));
+    expect(useThreadSelectionStore.getState().hasSelection()).toBe(true);
+    await act(() => {
+      sidebarContent.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          clientX: emptyX,
+          clientY: emptyY,
+        }),
+      );
+    });
+    expect(useThreadSelectionStore.getState().hasSelection()).toBe(false);
+    expect(startThread).not.toHaveBeenCalled();
+
+    // Clicking empty space again opens the No project placeholder draft.
+    await act(() => {
+      sidebarContent.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          clientX: emptyX,
+          clientY: emptyY,
+        }),
+      );
+    });
+    await vi.waitFor(() =>
+      expect(startThread).toHaveBeenCalledExactlyOnceWith(
+        scopeProjectRef(scratchProject.environmentId, scratchProject.id),
+        undefined,
+      ),
+    );
+  });
+
+  it("auto-opens a No project draft when the open last active thread moves to working", async () => {
+    using stack = new DisposableStack();
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, sidebarWorkingShelfEnabled: true });
+
+    const { local, activeProject, scratchProject } = setupScratchEnvironment(stack);
+    const initialThread = threadShell(activeProject.id, 0);
+    const routeThreadRef = scopeThreadRef(local, initialThread.id);
+    const startThread = vi.fn().mockResolvedValue({
+      draftId: DraftId.make("scratch-draft"),
+      threadId: ThreadId.make("scratch-thread"),
+    });
+
+    vi.mocked(useQuietThreadShells).mockReturnValue([initialThread]);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef: routeThreadRef });
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: initialThread,
+      defaultProjectRef: scopeProjectRef(activeProject.environmentId, activeProject.id),
+      defaultProjectFallbackReady: true,
+      handleNewThread: startThread,
+      routeDraftId: null,
+      routeThreadRef,
+    });
+
+    const tree = () => (
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>
+    );
+    await using screen = await render(tree(), { router: "/local/thread-0" });
+    expect(startThread).not.toHaveBeenCalled();
+
+    const movedToWorking = {
+      ...initialThread,
+      runtime: {
+        status: "running" as const,
+        activeRunId: null,
+        providerInstanceId: "codex" as never,
+        providerName: "Codex",
+        lastError: null,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    vi.mocked(useQuietThreadShells).mockReturnValue([movedToWorking]);
+    await screen.rerender(tree());
+
+    await vi.waitFor(() =>
+      expect(startThread).toHaveBeenCalledExactlyOnceWith(
+        scopeProjectRef(scratchProject.environmentId, scratchProject.id),
+        undefined,
+      ),
+    );
+  });
+
+  it("does not auto-open when switching directly to an already-working thread or when another active thread remains", async () => {
+    using stack = new DisposableStack();
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, sidebarWorkingShelfEnabled: true });
+
+    const { local, activeProject } = setupScratchEnvironment(stack);
+    const activeThread = threadShell(activeProject.id, 0);
+    const otherActive = threadShell(activeProject.id, 1);
+    const alreadyWorking = workingThreadShell(activeProject.id, 2);
+    const startThread = vi.fn().mockResolvedValue(null);
+
+    vi.mocked(useQuietThreadShells).mockReturnValue([activeThread, otherActive, alreadyWorking]);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({
+      kind: "server",
+      threadRef: scopeThreadRef(local, activeThread.id),
+    });
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread,
+      defaultProjectRef: scopeProjectRef(activeProject.environmentId, activeProject.id),
+      defaultProjectFallbackReady: true,
+      handleNewThread: startThread,
+      routeDraftId: null,
+      routeThreadRef: scopeThreadRef(local, activeThread.id),
+    });
+
+    const tree = () => (
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>
+    );
+    await using screen = await render(tree(), { router: "/local/thread-0" });
+
+    // Transitioning open thread to working while another active thread remains stays put.
+    const movedFirstToWorking = {
+      ...activeThread,
+      runtime: alreadyWorking.runtime,
+    };
+    vi.mocked(useQuietThreadShells).mockReturnValue([
+      movedFirstToWorking,
+      otherActive,
+      alreadyWorking,
+    ]);
+    await screen.rerender(tree());
+    expect(startThread).not.toHaveBeenCalled();
+
+    // Explicitly switching route to an already-working thread when inbox is empty stays put.
+    vi.mocked(useQuietThreadShells).mockReturnValue([alreadyWorking]);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({
+      kind: "server",
+      threadRef: scopeThreadRef(local, alreadyWorking.id),
+    });
+    await screen.rerender(tree());
+    expect(startThread).not.toHaveBeenCalled();
+  });
+
+  it("opens a No project draft when settling the last active thread while the Working shelf is expanded", async () => {
+    using stack = new DisposableStack();
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, sidebarWorkingShelfEnabled: true });
+    const previousWorkingExpanded = localStorage.getItem("t3code:sidebar:working-expanded");
+    stack.defer(() => {
+      if (previousWorkingExpanded === null) {
+        localStorage.removeItem("t3code:sidebar:working-expanded");
+      } else {
+        localStorage.setItem("t3code:sidebar:working-expanded", previousWorkingExpanded);
+      }
+    });
+
+    const prevReadConfigLoaded = vi
+      .mocked(readEnvironmentServerConfigLoaded)
+      .getMockImplementation();
+    const prevReadThreadShell = vi.mocked(readThreadShell).getMockImplementation();
+    const prevUseCommand = vi.mocked(useOrchestrationCommand).getMockImplementation();
+    stack.defer(() => {
+      if (prevReadConfigLoaded) {
+        vi.mocked(readEnvironmentServerConfigLoaded).mockImplementation(prevReadConfigLoaded);
+      }
+      if (prevReadThreadShell) {
+        vi.mocked(readThreadShell).mockImplementation(prevReadThreadShell);
+      }
+      if (prevUseCommand) {
+        vi.mocked(useOrchestrationCommand).mockImplementation(prevUseCommand);
+      }
+    });
+
+    const { local, activeProject, scratchProject } = setupScratchEnvironment(stack);
+    const activeThread = threadShell(activeProject.id, 0);
+    const workingThread = workingThreadShell(activeProject.id, 1);
+    const routeThreadRef = scopeThreadRef(local, activeThread.id);
+    const startThread = vi.fn().mockResolvedValue({
+      draftId: DraftId.make("scratch-draft"),
+      threadId: ThreadId.make("scratch-thread"),
+    });
+
+    let currentShell: EnvironmentThreadShell = activeThread;
+    vi.mocked(readEnvironmentServerConfigLoaded).mockReturnValue(true);
+    vi.mocked(readThreadShell).mockImplementation((ref) =>
+      ref.threadId === activeThread.id
+        ? currentShell
+        : ref.threadId === workingThread.id
+          ? workingThread
+          : null,
+    );
+    vi.mocked(useOrchestrationCommand).mockImplementation(
+      () =>
+        vi.fn(async () => {
+          currentShell = {
+            ...activeThread,
+            settledOverride: "settled",
+            settledAt: "2026-01-01T00:00:00.000Z",
+          };
+          return AsyncResult.success(undefined);
+        }) as never,
+    );
+    vi.mocked(useQuietThreadShells).mockReturnValue([activeThread, workingThread]);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef: routeThreadRef });
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread,
+      defaultProjectRef: scopeProjectRef(activeProject.environmentId, activeProject.id),
+      defaultProjectFallbackReady: true,
+      handleNewThread: startThread,
+      routeDraftId: null,
+      routeThreadRef,
+    });
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+      { router: "/local/thread-0" },
+    );
+    const navigate = vi.spyOn(screen.router!, "navigate").mockResolvedValue(undefined);
+
+    const workingShelfToggle = screen.container.querySelector<HTMLElement>(
+      '[data-sidebar-row="shelf:working"]',
+    )!;
+    if (workingShelfToggle.getAttribute("aria-expanded") === "false") {
+      await act(() => workingShelfToggle.click());
+    }
+    await expect.element(screen.getByText("Working 1").first()).toBeInTheDocument();
+
+    await userEvent.hover(screen.getByText("Thread 0").first());
+    const settleButton = screen.getByRole("button", { name: "Settle thread" }).first();
+    await userEvent.click(settleButton);
+
+    await vi.waitFor(() =>
+      expect(startThread).toHaveBeenCalledExactlyOnceWith(
+        scopeProjectRef(scratchProject.environmentId, scratchProject.id),
+        undefined,
+      ),
+    );
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

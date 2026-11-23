@@ -9,7 +9,13 @@ import { AsyncResult } from "effect/reactivity";
 import {
   ADD_PROJECT_SCOPE_ITEM_VALUE,
   filterSidebarProjectScopeItems,
+  isPointInSidebarEmptySpace,
+  SIDEBAR_EMPTY_SPACE_BELOW_SHELF_MIN_PX,
+  SIDEBAR_EMPTY_SPACE_MIN_GAP_PX,
+  shouldAutoOpenInboxZeroPlaceholder,
   shouldCreateNewThreadInCurrentProject,
+  type ObservedSidebarRouteThread,
+  type SidebarEmptySpaceRowRect,
   resolveScopedNewThreadProjectRef,
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
@@ -1830,5 +1836,180 @@ describe("filterSidebarProjectScopeItems", () => {
 
     expect(filter("")).toEqual([ADD_PROJECT_SCOPE_ITEM_VALUE, "all", "p1"]);
     expect(filter("project")).toEqual(["p1"]);
+  });
+});
+
+describe("shouldAutoOpenInboxZeroPlaceholder", () => {
+  const baseInput = {
+    inboxEmpty: true,
+    modalOpen: false,
+    viewingSubagentChild: false,
+    hasUnsentComposerContent: false,
+    manuallyParking: false,
+  };
+
+  it.each([
+    ["active", "working"],
+    ["active", "settled"],
+    ["active", "snoozed"],
+    ["pinned", "settled"],
+  ] as const)(
+    "returns true when the open thread moves from %s to %s in an empty inbox",
+    (fromSection, toSection) => {
+      const previous: ObservedSidebarRouteThread = {
+        routeKind: "server",
+        threadKey: "local:thread-1",
+        section: fromSection,
+      };
+      const current: ObservedSidebarRouteThread = {
+        routeKind: "server",
+        threadKey: "local:thread-1",
+        section: toSection,
+      };
+      expect(shouldAutoOpenInboxZeroPlaceholder({ ...baseInput, previous, current })).toBe(true);
+    },
+  );
+
+  it("returns true when a newly sent draft promotes into working with an empty inbox", () => {
+    expect(
+      shouldAutoOpenInboxZeroPlaceholder({
+        ...baseInput,
+        previous: { routeKind: "draft", threadKey: "local:thread-1", section: null },
+        current: { routeKind: "server", threadKey: "local:thread-1", section: "working" },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when a draft promotes into settled", () => {
+    expect(
+      shouldAutoOpenInboxZeroPlaceholder({
+        ...baseInput,
+        previous: { routeKind: "draft", threadKey: "local:thread-1", section: null },
+        current: { routeKind: "server", threadKey: "local:thread-1", section: "settled" },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when the inbox still has other active, pinned, or draft items", () => {
+    expect(
+      shouldAutoOpenInboxZeroPlaceholder({
+        ...baseInput,
+        inboxEmpty: false,
+        previous: { routeKind: "server", threadKey: "local:thread-1", section: "active" },
+        current: { routeKind: "server", threadKey: "local:thread-1", section: "working" },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when navigating directly to a working, settled, or snoozed thread", () => {
+    expect(
+      shouldAutoOpenInboxZeroPlaceholder({
+        ...baseInput,
+        previous: { routeKind: "server", threadKey: "local:thread-1", section: "active" },
+        current: { routeKind: "server", threadKey: "local:thread-2", section: "working" },
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoOpenInboxZeroPlaceholder({
+        ...baseInput,
+        previous: { routeKind: "draft", threadKey: null, section: null },
+        current: { routeKind: "server", threadKey: "local:thread-2", section: "settled" },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when already viewing a working thread and the inbox becomes empty", () => {
+    expect(
+      shouldAutoOpenInboxZeroPlaceholder({
+        ...baseInput,
+        previous: { routeKind: "server", threadKey: "local:thread-1", section: "working" },
+        current: { routeKind: "server", threadKey: "local:thread-1", section: "working" },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false on initial mount or bootstrap onto a working thread", () => {
+    expect(
+      shouldAutoOpenInboxZeroPlaceholder({
+        ...baseInput,
+        previous: null,
+        current: { routeKind: "server", threadKey: "local:thread-1", section: "working" },
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoOpenInboxZeroPlaceholder({
+        ...baseInput,
+        previous: { routeKind: "server", threadKey: "local:thread-1", section: null },
+        current: { routeKind: "server", threadKey: "local:thread-1", section: "working" },
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    "modalOpen",
+    "viewingSubagentChild",
+    "hasUnsentComposerContent",
+    "manuallyParking",
+  ] as const)("returns false when %s is true", (guard) => {
+    expect(
+      shouldAutoOpenInboxZeroPlaceholder({
+        ...baseInput,
+        [guard]: true,
+        previous: { routeKind: "server", threadKey: "local:thread-1", section: "active" },
+        current: { routeKind: "server", threadKey: "local:thread-1", section: "working" },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isPointInSidebarEmptySpace", () => {
+  const row = (
+    top: number,
+    bottom: number,
+    opts: { isShelfHeader?: boolean; isShelfRow?: boolean } = {},
+  ): SidebarEmptySpaceRowRect => ({
+    top,
+    bottom,
+    isShelfHeader: opts.isShelfHeader ?? false,
+    isShelfRow: opts.isShelfRow ?? false,
+  });
+
+  it("accepts clicks when the list has no rows", () => {
+    expect(isPointInSidebarEmptySpace(150, [])).toBe(true);
+  });
+
+  it("accepts clicks in an empty inbox above a bottom-anchored Working shelf", () => {
+    const rows = [row(420, 452, { isShelfHeader: true }), row(453, 531, { isShelfRow: true })];
+    expect(isPointInSidebarEmptySpace(200, rows)).toBe(true);
+    expect(isPointInSidebarEmptySpace(430, rows)).toBe(false);
+    expect(isPointInSidebarEmptySpace(452.5, rows)).toBe(false);
+    expect(isPointInSidebarEmptySpace(531 + SIDEBAR_EMPTY_SPACE_BELOW_SHELF_MIN_PX - 1, rows)).toBe(
+      false,
+    );
+    expect(isPointInSidebarEmptySpace(531 + SIDEBAR_EMPTY_SPACE_BELOW_SHELF_MIN_PX, rows)).toBe(
+      true,
+    );
+  });
+
+  it("accepts the gap above Working when active rows exist, but rejects horizontal row gutters and seams", () => {
+    const rows = [row(100, 178), row(179, 257), row(420, 452, { isShelfHeader: true })];
+    expect(isPointInSidebarEmptySpace(340, rows)).toBe(true);
+    expect(isPointInSidebarEmptySpace(140, rows)).toBe(false);
+    expect(isPointInSidebarEmptySpace(94, rows)).toBe(false);
+    expect(isPointInSidebarEmptySpace(178.5, rows)).toBe(false);
+  });
+
+  it("rejects a collapsed gap below the minimum threshold above a shelf header", () => {
+    const rows = [
+      row(100, 178),
+      row(178 + SIDEBAR_EMPTY_SPACE_MIN_GAP_PX - 1, 210, { isShelfHeader: true }),
+    ];
+    expect(isPointInSidebarEmptySpace(180, rows)).toBe(false);
+  });
+
+  it("accepts empty space below active/folder rows when no bottom shelves exist", () => {
+    const rows = [row(100, 132), row(133, 169)];
+    expect(isPointInSidebarEmptySpace(220, rows)).toBe(true);
+    expect(isPointInSidebarEmptySpace(95, rows)).toBe(false);
   });
 });

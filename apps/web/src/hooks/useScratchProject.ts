@@ -33,8 +33,10 @@ function reportScratchFailure(title: string, error: unknown) {
   );
 }
 
-type ScratchEnvironment = Pick<EnvironmentPresentation, "connection" | "serverConfig"> & {
+type ScratchEnvironment = {
   readonly environmentId: EnvironmentId;
+  readonly connection: Pick<EnvironmentPresentation["connection"], "phase">;
+  readonly serverConfig: EnvironmentPresentation["serverConfig"];
 };
 
 export function createScratchProjectActions(input: {

@@ -1503,3 +1503,155 @@ export function sortScopedProjectsForSidebar<
       left.id.localeCompare(right.id),
   );
 }
+
+export interface ObservedSidebarRouteThread {
+  readonly routeKind: "server" | "draft" | "other";
+  readonly threadKey: string | null;
+  readonly section: SidebarSection | null;
+}
+
+function isParkedSidebarSection(section: SidebarSection | null): boolean {
+  return section === "working" || section === "settled" || section === "snoozed";
+}
+
+export function shouldAutoOpenInboxZeroPlaceholder(input: {
+  readonly previous: ObservedSidebarRouteThread | null;
+  readonly current: ObservedSidebarRouteThread;
+  readonly inboxEmpty: boolean;
+  readonly modalOpen: boolean;
+  readonly viewingSubagentChild: boolean;
+  readonly hasUnsentComposerContent: boolean;
+  readonly manuallyParking: boolean;
+}): boolean {
+  if (
+    !input.inboxEmpty ||
+    input.modalOpen ||
+    input.viewingSubagentChild ||
+    input.hasUnsentComposerContent ||
+    input.manuallyParking
+  ) {
+    return false;
+  }
+  if (
+    input.previous === null ||
+    input.current.routeKind !== "server" ||
+    input.current.threadKey === null ||
+    input.previous.threadKey !== input.current.threadKey ||
+    !isParkedSidebarSection(input.current.section)
+  ) {
+    return false;
+  }
+  if (
+    input.previous.routeKind === "server" &&
+    (input.previous.section === "active" || input.previous.section === "pinned")
+  ) {
+    return true;
+  }
+  return input.previous.routeKind === "draft" && input.current.section === "working";
+}
+
+export interface SidebarEmptySpaceRowRect {
+  readonly top: number;
+  readonly bottom: number;
+  readonly isShelfHeader: boolean;
+  readonly isShelfRow: boolean;
+}
+
+export const SIDEBAR_EMPTY_SPACE_MIN_GAP_PX = 8;
+export const SIDEBAR_EMPTY_SPACE_BELOW_SHELF_MIN_PX = 16;
+
+export function isPointInSidebarEmptySpace(
+  clientY: number,
+  rows: readonly SidebarEmptySpaceRowRect[],
+): boolean {
+  if (rows.length === 0) return true;
+  let above: SidebarEmptySpaceRowRect | null = null;
+  let below: SidebarEmptySpaceRowRect | null = null;
+  for (const row of rows) {
+    if (clientY >= row.top && clientY <= row.bottom) {
+      return false;
+    }
+    if (row.bottom < clientY && (above === null || row.bottom > above.bottom)) {
+      above = row;
+    }
+    if (row.top > clientY && (below === null || row.top < below.top)) {
+      below = row;
+    }
+  }
+  if (above === null && below !== null) {
+    return below.isShelfHeader;
+  }
+  if (above !== null && below !== null) {
+    return (
+      below.isShelfHeader &&
+      !above.isShelfHeader &&
+      !above.isShelfRow &&
+      below.top - above.bottom >= SIDEBAR_EMPTY_SPACE_MIN_GAP_PX
+    );
+  }
+  if (above !== null && below === null) {
+    return (
+      (!above.isShelfHeader && !above.isShelfRow) ||
+      clientY - above.bottom >= SIDEBAR_EMPTY_SPACE_BELOW_SHELF_MIN_PX
+    );
+  }
+  return false;
+}
+
+const SIDEBAR_EMPTY_SPACE_EXCLUDED_SELECTOR =
+  'button, a, input, textarea, select, [role="button"], [role="textbox"], [role="option"], [role="menuitem"], [data-sidebar-row], [data-thread-item], [data-testid="sidebar-draft-row"], [data-testid="sidebar-working-header"], [data-testid="sidebar-snoozed-header"], [data-testid="sidebar-settled-header"], [data-sidebar-empty-ignore]';
+
+const SIDEBAR_SHELF_HEADER_TEST_IDS = new Set([
+  "sidebar-working-header",
+  "sidebar-snoozed-header",
+  "sidebar-settled-header",
+]);
+
+export function isSidebarEmptySpaceClick(
+  event: Pick<
+    MouseEvent,
+    | "defaultPrevented"
+    | "button"
+    | "metaKey"
+    | "ctrlKey"
+    | "shiftKey"
+    | "altKey"
+    | "target"
+    | "clientY"
+  >,
+  listElement: HTMLUListElement | null,
+): boolean {
+  if (
+    event.defaultPrevented ||
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return false;
+  }
+  if (!(event.target instanceof Element)) {
+    return false;
+  }
+  if (event.target.closest(SIDEBAR_EMPTY_SPACE_EXCLUDED_SELECTOR) !== null) {
+    return false;
+  }
+  if (listElement === null) {
+    return true;
+  }
+  const rows: SidebarEmptySpaceRowRect[] = [];
+  for (const child of listElement.children) {
+    if (!(child instanceof HTMLLIElement)) continue;
+    const rect = child.getBoundingClientRect();
+    if (rect.height <= 0) continue;
+    const testId = child.dataset.testid;
+    rows.push({
+      top: rect.top,
+      bottom: rect.bottom,
+      isShelfHeader: testId !== undefined && SIDEBAR_SHELF_HEADER_TEST_IDS.has(testId),
+      isShelfRow: child.querySelector('[data-sidebar-parent^="shelf:"]') !== null,
+    });
+  }
+  return isPointInSidebarEmptySpace(event.clientY, rows);
+}

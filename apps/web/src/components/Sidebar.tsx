@@ -132,6 +132,7 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { createScratchProjectActions } from "../hooks/useScratchProject";
 import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
 import { useProjectPin } from "../hooks/useProjectGroupUpdate";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
@@ -159,6 +160,7 @@ import {
 import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { threadEnvironment } from "../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
 import { useThreadSearch } from "../state/queries";
@@ -192,6 +194,7 @@ import {
   ADD_PROJECT_SCOPE_ITEM_VALUE,
   filterSidebarProjectScopeItems,
   firstValidTimestampMs,
+  isSidebarEmptySpaceClick,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -204,6 +207,7 @@ import {
   resolveSidebarThreadSection,
   resolveSidebarReorderableThreadKeys,
   searchSidebarThreads,
+  shouldAutoOpenInboxZeroPlaceholder,
   shouldCreateNewThreadInCurrentProject,
   resolveScopedNewThreadProjectRef,
   shouldNavigateAfterThreadPark,
@@ -216,6 +220,7 @@ import {
   useSnoozeWakeClock,
   threadShortcutContext,
   useThreadJumpHintsVisible,
+  type ObservedSidebarRouteThread,
   type SidebarListItem,
   type SidebarSection,
 } from "./Sidebar.logic";
@@ -618,6 +623,7 @@ function useSidebarThreads(input: {
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
     settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
+    workingThreadKeys: new Set(workingThreads.map(threadShellKey)),
     snoozedThreadKeys: new Set(snoozedThreads.map(threadShellKey)),
     sectionByThreadKey,
     pinnedKeys: pinnedThreads.map(threadShellKey),
@@ -1014,7 +1020,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
   const acknowledgeWoke = useAcknowledgeThreadWoke();
   // A Settings or Usage modal keeps the thread behind it current.
-  const routeTarget = useShownThreadRouteTarget().shownTarget;
+  const { shownTarget: routeTarget, modalOpen } = useShownThreadRouteTarget();
   const routeDraftThread = useComposerDraftStore((store) =>
     routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
   );
@@ -1041,6 +1047,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const projectsRef = useRef(projects);
+  const serverConfigsRef = useRef(serverConfigs);
+  const connectedEnvironmentIdsRef = useRef(connectedEnvironmentIds);
+  const primaryEnvironmentIdRef = useRef(primaryEnvironmentId);
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const [renamingThreadRef, setRenamingThreadRef] = useState<ScopedThreadRef | null>(null);
@@ -1357,6 +1367,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     orderedThreadKeys,
     threadByKey,
     settledThreadKeys,
+    workingThreadKeys,
     snoozedThreadKeys,
     sectionByThreadKey,
     pinnedKeys,
@@ -1460,6 +1471,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // Read changing maps/sets through refs so streamed events preserve row callbacks.
   const threadByKeyRef = useRef(threadByKey);
   const settledThreadKeysRef = useRef(settledThreadKeys);
+  const workingThreadKeysRef = useRef(workingThreadKeys);
   const snoozedThreadKeysRef = useRef(snoozedThreadKeys);
 
   const { draftIds, routeDraftComposer } = useSidebarDrafts(
@@ -1630,6 +1642,93 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     navigateToThread(threadRef);
   };
 
+  const currentRouteSection =
+    routeRowThreadKey === null ? null : (sectionByThreadKey.get(routeRowThreadKey) ?? null);
+  const hasLiveRouteDraft = routeTarget?.kind === "draft" && routeDraftThread !== null;
+  const isDraftRoute = routeTarget?.kind === "draft";
+  const isServerRoute = routeTarget?.kind === "server";
+  const topInboxEmpty =
+    pinnedThreads.length === 0 && activeThreads.length === 0 && visibleDraftSessionCount === 0;
+  const viewingSubagentChild =
+    routeThreadKey !== null && routeRowThreadKey !== null && routeThreadKey !== routeRowThreadKey;
+  const hasOptimisticDrop = optimisticDrop !== null;
+  const prevObservedRouteThreadRef = useRef<ObservedSidebarRouteThread | null>(null);
+
+  const openNoProjectPlaceholder = useStableCallback(
+    async (options?: {
+      fallbackEnvironmentId?: EnvironmentId | null;
+      fallbackProjectRef?: ScopedProjectRef | null;
+      replace?: boolean;
+      onlyIfOnPathname?: string;
+    }): Promise<boolean> => {
+      const stillOnExpectedRoute = () =>
+        options?.onlyIfOnPathname === undefined ||
+        router.state.location.pathname === options.onlyIfOnPathname;
+      const connectedSet = new Set(connectedEnvironmentIdsRef.current);
+      const scratchActions = createScratchProjectActions({
+        environments: () =>
+          [...serverConfigsRef.current].map(([environmentId, serverConfig]) => ({
+            environmentId,
+            connection: {
+              phase: connectedSet.has(environmentId)
+                ? ("connected" as const)
+                : ("offline" as const),
+            },
+            serverConfig,
+          })),
+        primaryEnvironmentId: () => primaryEnvironmentIdRef.current,
+        registry: appAtomRegistry,
+        handleNewThread,
+      });
+      const fallbackEnvId =
+        options?.fallbackEnvironmentId ??
+        routeThreadRef?.environmentId ??
+        routeDraftThread?.environmentId ??
+        null;
+      const scratchEnvId = scratchActions.scratchEnvironmentId(fallbackEnvId);
+      if (scratchEnvId !== null) {
+        const scratchRoot = scratchActions.scratchWorkspaceRootFor(scratchEnvId);
+        const existingScratch = projectsRef.current.find(
+          (project) =>
+            project.environmentId === scratchEnvId &&
+            project.archivedAt == null &&
+            isScratchProject(project, scratchRoot),
+        );
+        if (existingScratch) {
+          if (!stillOnExpectedRoute()) return false;
+          const result = await settlePromise(() =>
+            handleNewThread(
+              scopeProjectRef(existingScratch.environmentId, existingScratch.id),
+              options?.replace ? { replace: true } : undefined,
+            ),
+          );
+          return result._tag === "Success" && result.value !== null;
+        }
+        if (readEnvironmentScope(scratchEnvId, AuthOrchestrationOperateScope)) {
+          const project = await scratchActions.openScratchProject(scratchEnvId);
+          if (project && stillOnExpectedRoute()) {
+            const result = await settlePromise(() =>
+              handleNewThread(
+                scopeProjectRef(project.environmentId, project.id),
+                options?.replace ? { replace: true } : undefined,
+              ),
+            );
+            return result._tag === "Success" && result.value !== null;
+          }
+          if (project) return false;
+        }
+      }
+      if (options?.fallbackProjectRef && stillOnExpectedRoute()) {
+        const fallbackProjectRef = options.fallbackProjectRef;
+        const result = await settlePromise(() =>
+          handleNewThread(fallbackProjectRef, options?.replace ? { replace: true } : undefined),
+        );
+        return result._tag === "Success" && result.value !== null;
+      }
+      return false;
+    },
+  );
+
   // Snapshot navigation before partition mutation; background parks use a null plan.
   const planForwardNavigation = (
     threadKey: string,
@@ -1639,20 +1738,34 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const shell = threadByKeyRef.current.get(threadKey);
     const orderedKeys = orderedThreadKeysRef.current;
     const settledKeys = settledThreadKeysRef.current;
+    const workingKeys = workingThreadKeysRef.current;
     const snoozedKeys = snoozedThreadKeysRef.current;
     const currentIndex = orderedKeys.indexOf(threadKey);
     const nextCardKey =
       currentIndex === -1
         ? null
         : ([...orderedKeys.slice(currentIndex + 1), ...orderedKeys.slice(0, currentIndex)].find(
-            (key) => !settledKeys.has(key) && !snoozedKeys.has(key) && !coParkingKeys?.has(key),
+            (key) =>
+              !settledKeys.has(key) &&
+              !workingKeys.has(key) &&
+              !snoozedKeys.has(key) &&
+              !coParkingKeys?.has(key),
           ) ?? null);
     const nextThread = nextCardKey ? threadByKeyRef.current.get(nextCardKey) : null;
     return nextThread
       ? () => navigateToThread(scopeThreadRef(nextThread.environmentId, nextThread.id))
-      : shell
-        ? () => void handleNewThread(scopeProjectRef(shell.environmentId, shell.projectId))
-        : () => void router.navigate({ to: "/" });
+      : () => {
+          void openNoProjectPlaceholder({
+            fallbackEnvironmentId: shell?.environmentId ?? null,
+            fallbackProjectRef: shell
+              ? scopeProjectRef(shell.environmentId, shell.projectId)
+              : null,
+          }).then((opened) => {
+            if (!opened && !shell) {
+              void router.navigate({ to: "/" });
+            }
+          });
+        };
   };
 
   const attemptSettle = (
@@ -1698,6 +1811,64 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers this sidebar's settle handler in the module-level settleAndAdvance registry
   useEffect(() => registerSettleAndAdvance(attemptSettle), [attemptSettle]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the No project placeholder when the open thread moves out of an otherwise empty inbox
+  useEffect(() => {
+    const previous = prevObservedRouteThreadRef.current;
+    const routeKind: ObservedSidebarRouteThread["routeKind"] = isServerRoute
+      ? "server"
+      : isDraftRoute && (hasLiveRouteDraft || previous?.routeKind === "draft")
+        ? "draft"
+        : "other";
+    const current: ObservedSidebarRouteThread = {
+      routeKind,
+      threadKey: routeRowThreadKey,
+      section: currentRouteSection,
+    };
+    prevObservedRouteThreadRef.current = current;
+
+    const routeRef = routeThreadKey === null ? null : parseScopedThreadKey(routeThreadKey);
+    const manuallyParking =
+      hasOptimisticDrop ||
+      (routeRowThreadKey !== null &&
+        (settlingThreadKeysRef.current.has(routeRowThreadKey) ||
+          snoozingThreadKeysRef.current.has(routeRowThreadKey)));
+    const hasUnsentComposerContent =
+      routeRef !== null &&
+      composerDraftHasUserContent(useComposerDraftStore.getState().getComposerDraft(routeRef));
+    if (
+      shouldAutoOpenInboxZeroPlaceholder({
+        previous,
+        current,
+        inboxEmpty: topInboxEmpty && !isSearchingThreads,
+        modalOpen,
+        viewingSubagentChild,
+        hasUnsentComposerContent,
+        manuallyParking,
+      })
+    ) {
+      const expectedPathname = router.state.location.pathname;
+      void openNoProjectPlaceholder({
+        fallbackEnvironmentId: routeRef?.environmentId ?? null,
+        onlyIfOnPathname: expectedPathname,
+      });
+    }
+  }, [
+    currentRouteSection,
+    hasLiveRouteDraft,
+    hasOptimisticDrop,
+    isDraftRoute,
+    isSearchingThreads,
+    isServerRoute,
+    modalOpen,
+    openNoProjectPlaceholder,
+    prevObservedRouteThreadRef,
+    routeRowThreadKey,
+    routeThreadKey,
+    router,
+    snoozingThreadKeysRef,
+    topInboxEmpty,
+    viewingSubagentChild,
+  ]);
   const settleThreads = (threadKeys: readonly string[]) => {
     const coSettlingKeys = new Set(threadKeys);
     for (const threadKey of threadKeys) {
@@ -1852,9 +2023,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes committed list data to refs read by stable drag and sweep callbacks
   useLayoutEffect(() => {
     projectGroupsRef.current = projectGroups;
+    projectsRef.current = projects;
+    serverConfigsRef.current = serverConfigs;
+    connectedEnvironmentIdsRef.current = connectedEnvironmentIds;
+    primaryEnvironmentIdRef.current = primaryEnvironmentId;
     orderedThreadKeysRef.current = orderedThreadKeys;
     threadByKeyRef.current = threadByKey;
     settledThreadKeysRef.current = settledThreadKeys;
+    workingThreadKeysRef.current = workingThreadKeys;
     snoozedThreadKeysRef.current = snoozedThreadKeys;
     sectionByThreadKeyRef.current = sectionByThreadKey;
   });
@@ -3089,12 +3265,30 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? shortcutLabelForCommand(keybindings, "chat.newLocal")
       : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
+  const handleSidebarEmptySpaceClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (
+      isSearchingThreads ||
+      dragState !== null ||
+      actionSweep !== null ||
+      renamingThreadRef !== null
+    ) {
+      return;
+    }
+    if (!isSidebarEmptySpaceClick(event, threadListRef.current)) return;
+    if (useThreadSelectionStore.getState().hasSelection()) {
+      clearSelection();
+      return;
+    }
+    if (isMobile) setOpenMobile(false);
+    void openNoProjectPlaceholder();
+  };
   return (
     <SidebarFolderDrop>
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         ref={sidebarContentRef}
         className="min-h-full"
+        onClick={handleSidebarEmptySpaceClick}
         fixedHeader={
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
