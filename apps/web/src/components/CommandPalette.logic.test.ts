@@ -1,6 +1,13 @@
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  SourceControlProviderKind,
+  ThreadId,
+  type SourceControlRepositoryListItem,
+} from "@t3tools/contracts";
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
@@ -10,8 +17,10 @@ import {
   buildThreadActionItems,
   buildLinkedThreadActionItems,
   filterPinnedBrowseEntries,
+  filterRemoteRepositories,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
+  remoteProjectInputPlaceholder,
   resolveAddProjectEntry,
   createCommandPaletteSearchState,
   reduceCommandPaletteSearchState,
@@ -985,5 +994,67 @@ describe("newThreadNoProjectIndex", () => {
   it("keeps a pinned or current scratch project in its own place", () => {
     expect(newThreadNoProjectIndex([entry(false, true, true), entry()])).toBe(0);
     expect(newThreadNoProjectIndex([entry(true), entry(true, false, true), entry()])).toBe(1);
+  });
+});
+
+describe("filterRemoteRepositories", () => {
+  const github = SourceControlProviderKind.make("github");
+  const repo = (nameWithOwner: string, description?: string): SourceControlRepositoryListItem => ({
+    provider: github,
+    nameWithOwner,
+    url: `https://github.com/${nameWithOwner}`,
+    sshUrl: `git@github.com:${nameWithOwner}.git`,
+    ...(description !== undefined ? { description } : {}),
+  });
+  const repos = [
+    repo("nicolasmertens/humble-onboarding", "Onboarding flows"),
+    repo("nicolasmertens/humble-search", "Search service"),
+    repo("nicolasmertens/humble-tools", "Browser extension tools"),
+    repo("nicolasmertens/t3code", "T3 Code fork"),
+  ];
+
+  it("keeps repository order when the query is empty", () => {
+    expect(filterRemoteRepositories(repos, "  ").map((entry) => entry.nameWithOwner)).toEqual(
+      repos.map((entry) => entry.nameWithOwner),
+    );
+  });
+
+  it("matches prefixes, words, full owner/name, and mid-word substrings", () => {
+    expect(filterRemoteRepositories(repos, "humble").map((entry) => entry.nameWithOwner)).toEqual([
+      "nicolasmertens/humble-onboarding",
+      "nicolasmertens/humble-search",
+      "nicolasmertens/humble-tools",
+    ]);
+    expect(filterRemoteRepositories(repos, "tools").map((entry) => entry.nameWithOwner)).toEqual([
+      "nicolasmertens/humble-tools",
+    ]);
+    expect(
+      filterRemoteRepositories(repos, "humble tools").map((entry) => entry.nameWithOwner),
+    ).toEqual(["nicolasmertens/humble-tools"]);
+    expect(
+      filterRemoteRepositories(repos, "nicolasmertens/humble-tools").map(
+        (entry) => entry.nameWithOwner,
+      ),
+    ).toEqual(["nicolasmertens/humble-tools"]);
+    expect(filterRemoteRepositories(repos, "mble").map((entry) => entry.nameWithOwner)).toEqual([
+      "nicolasmertens/humble-onboarding",
+      "nicolasmertens/humble-search",
+      "nicolasmertens/humble-tools",
+    ]);
+    expect(filterRemoteRepositories(repos, "pingdotgg/t3code")).toEqual([]);
+  });
+
+  it("updates the placeholder when repository search is available", () => {
+    const flow = {
+      step: "repository" as const,
+      environmentId: EnvironmentId.make("local"),
+      source: github,
+    };
+    expect(remoteProjectInputPlaceholder(flow, undefined, { canSearch: true })).toBe(
+      "Search GitHub repositories or enter owner/repo",
+    );
+    expect(remoteProjectInputPlaceholder(flow, undefined, { canSearch: false })).toBe(
+      "Enter GitHub repository (owner/repo)",
+    );
   });
 });

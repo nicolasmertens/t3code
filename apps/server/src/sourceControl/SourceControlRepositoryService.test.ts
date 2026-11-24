@@ -989,3 +989,89 @@ it.effect("publish succeeds with status remote_added when the local repo has no 
     ),
   );
 });
+
+it.effect("lists repositories when the provider supports repository listing", () =>
+  Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const result = yield* service.listRepositories({
+      provider: SourceControlProviderKind.make("github"),
+      query: "humble",
+      limit: 5,
+    });
+    assert.deepStrictEqual(result, {
+      supported: true,
+      repositories: [
+        {
+          provider: SourceControlProviderKind.make("github"),
+          nameWithOwner: "nicolasmertens/humble-tools",
+          url: "https://github.com/nicolasmertens/humble-tools",
+          sshUrl: "git@github.com:nicolasmertens/humble-tools.git",
+          description: "Humble browser tools",
+          isPrivate: true,
+          pushedAt: "2026-11-23T12:00:00Z",
+        },
+      ],
+    });
+  }).pipe(
+    Effect.provide(
+      layer({
+        provider: makeProvider({
+          listRepositories: () =>
+            Effect.succeed([
+              {
+                nameWithOwner: "nicolasmertens/humble-tools",
+                url: "https://github.com/nicolasmertens/humble-tools",
+                sshUrl: "git@github.com:nicolasmertens/humble-tools.git",
+                description: "Humble browser tools",
+                isPrivate: true,
+                pushedAt: "2026-11-23T12:00:00Z",
+              },
+            ]),
+        }),
+      }),
+    ),
+  ),
+);
+
+it.effect("reports supported: false when the provider omits repository listing", () =>
+  Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const result = yield* service.listRepositories({
+      provider: SourceControlProviderKind.make("bitbucket"),
+    });
+    assert.deepStrictEqual(result, {
+      supported: false,
+      repositories: [],
+    });
+  }).pipe(Effect.provide(layer({}))),
+);
+
+it.effect("maps provider errors from repository listing through mapRepositoryError", () =>
+  Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const error = yield* Effect.flip(
+      service.listRepositories({
+        provider: SourceControlProviderKind.make("github"),
+      }),
+    );
+    assert.strictEqual(error.operation, "listRepositories");
+    assert.strictEqual(error.detail, "The source control operation could not be completed.");
+  }).pipe(
+    Effect.provide(
+      layer({
+        provider: makeProvider({
+          listRepositories: (input) =>
+            Effect.fail(
+              new SourceControlProviderError({
+                provider: SourceControlProviderKind.make("github"),
+                operation: "listRepositories",
+                cwd: input.cwd,
+                detail: "<html>raw upstream failure</html>",
+                cause: new Error("upstream"),
+              }),
+            ),
+        }),
+      }),
+    ),
+  ),
+);

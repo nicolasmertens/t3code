@@ -1,4 +1,5 @@
 import { requireSettingsSecretLiteral, SourceControlProviderKind } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -432,6 +433,25 @@ function repositoryCloneUrls(
   return { nameWithOwner: raw.full_name, url: raw.html_url, sshUrl: raw.ssh_url };
 }
 
+const RawListedRepositorySchema = Schema.Struct({
+  full_name: TrimmedNonEmptyString,
+  html_url: TrimmedNonEmptyString,
+  ssh_url: TrimmedNonEmptyString,
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  private: Schema.optional(Schema.Boolean),
+  pushed_at: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const decodeRawListedRepositories = decodeJsonResult(Schema.Array(Schema.Unknown));
+const decodeRawListedRepository = Schema.decodeUnknownOption(RawListedRepositorySchema);
+
+const LIST_REPOSITORIES_PAGE_SIZE = 100;
+const LIST_REPOSITORIES_MAX_PAGES = 5;
+const LIST_REPOSITORIES_CACHE_TTL_MS = 30_000;
+
+function hasNextLinkPage(linkHeader: string | undefined): boolean {
+  return linkHeader !== undefined && /<[^>]+>;\s*rel="next"/i.test(linkHeader);
+}
+
 const decodeViewerLogin = decodeJsonResult(Schema.Struct({ login: TrimmedNonEmptyString }));
 
 const decodeRestPullRequests = decodeJsonResult(Schema.Array(Schema.Unknown));
@@ -802,6 +822,16 @@ export const make = Effect.gen(function* () {
     }
     return decoded.success.login;
   });
+
+  type ListedGitHubRepository = SourceControlRepositoryCloneUrls & {
+    readonly description: string | null;
+    readonly isPrivate: boolean;
+    readonly pushedAt: string | null;
+  };
+  const repositoryListCache = new Map<
+    string,
+    { readonly expiresAt: number; readonly repositories: ReadonlyArray<ListedGitHubRepository> }
+  >();
 
   // Keep paths, argv and stderr in cause; expose only a fixed checkout error to clients.
   const gitFailure = (cause: unknown) =>
@@ -1201,6 +1231,89 @@ export const make = Effect.gen(function* () {
             }),
           ),
         ),
+    ),
+    listRepositories: Effect.fn("GitHubSourceControlProvider.listRepositories")(
+      function* (input) {
+        const host = (
+          input.host ??
+          (yield* resolveRepository({ cwd: input.cwd }).pipe(
+            Effect.map((locator) => locator.host),
+            Effect.orElseSucceed(() => environment.GH_HOST?.trim() || "github.com"),
+          ))
+        ).toLowerCase();
+        const now = yield* Clock.currentTimeMillis;
+        const cached = repositoryListCache.get(host);
+        let listed: ReadonlyArray<ListedGitHubRepository>;
+        if (cached && cached.expiresAt > now) {
+          listed = cached.repositories;
+        } else {
+          const collected: Array<ListedGitHubRepository> = [];
+          const seen = new Set<string>();
+          for (let page = 1; page <= LIST_REPOSITORIES_MAX_PAGES; page += 1) {
+            const params = new URLSearchParams({
+              affiliation: "owner,collaborator,organization_member",
+              sort: "pushed",
+              direction: "desc",
+              per_page: String(LIST_REPOSITORIES_PAGE_SIZE),
+              page: String(page),
+            });
+            const response = yield* rest({
+              host,
+              operation: "listRepositories",
+              path: `user/repos?${params}`,
+              allowReserve: true,
+            });
+            const decoded = decodeRawListedRepositories(response.body);
+            if (Result.isFailure(decoded)) {
+              return yield* failure("GitHub returned an invalid repository list.", decoded.failure);
+            }
+            for (const entry of decoded.success) {
+              const parsed = Option.getOrNull(decodeRawListedRepository(entry));
+              if (parsed === null) continue;
+              const dedupeKey = parsed.full_name.toLowerCase();
+              if (seen.has(dedupeKey)) continue;
+              seen.add(dedupeKey);
+              collected.push({
+                nameWithOwner: parsed.full_name,
+                url: parsed.html_url,
+                sshUrl: parsed.ssh_url,
+                description: parsed.description?.trim() || null,
+                isPrivate: parsed.private === true,
+                pushedAt: parsed.pushed_at?.trim() || null,
+              });
+            }
+            const linkHeader = response.headers.link ?? response.headers.Link;
+            if (
+              decoded.success.length < LIST_REPOSITORIES_PAGE_SIZE ||
+              !hasNextLinkPage(linkHeader)
+            ) {
+              break;
+            }
+          }
+          listed = collected;
+          repositoryListCache.set(host, {
+            expiresAt: now + LIST_REPOSITORIES_CACHE_TTL_MS,
+            repositories: listed,
+          });
+        }
+        const tokens =
+          input.query
+            ?.trim()
+            .toLowerCase()
+            .split(/\s+/)
+            .filter((token) => token.length > 0) ?? [];
+        const filtered =
+          tokens.length === 0
+            ? listed
+            : listed.filter((repo) => {
+                const haystack = `${repo.nameWithOwner} ${repo.description ?? ""}`.toLowerCase();
+                return tokens.every((token) => haystack.includes(token));
+              });
+        return input.limit !== undefined
+          ? filtered.slice(0, Math.max(1, Math.trunc(input.limit)))
+          : filtered;
+      },
+      (effect, input) => effect.pipe(Effect.mapError(providerError("listRepositories", input.cwd))),
     ),
     createRepository: Effect.fn("GitHubSourceControlProvider.createRepository")(
       function* (input) {

@@ -54,6 +54,7 @@ import {
   type DesktopWslState,
   type EnvironmentId,
   type FilesystemBrowseResult,
+  type SourceControlRepositoryInfo,
   SourceControlProviderKind,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
@@ -219,6 +220,7 @@ import {
   filterCommandPaletteGroups,
   buildNestedSearchItems,
   filterPinnedBrowseEntries,
+  filterRemoteRepositories,
   getCommandPaletteInputPlaceholder,
   getCommandPaletteMode,
   ITEM_ICON_CLASS,
@@ -277,6 +279,7 @@ import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/set
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
 import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/command";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { suggestAppAccessForRemote } from "./sourceControlAppAccessToast";
@@ -293,6 +296,7 @@ import { readPullRequestListPreferences } from "~/components/pullRequest/pullReq
 import { readIssueListPreferences } from "~/components/issue/issueListPreferences";
 import { IssueGlyph } from "~/components/issue/issuePresentation";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { formatRelativeTimeLabel } from "../timestampFormat";
 import { threadRecentUse } from "@t3tools/shared/paletteSearch";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
@@ -696,6 +700,29 @@ function OpenCommandPaletteDialog(props: {
   );
   const isRemoteProjectCloneFlow = addProjectCloneFlow !== null;
   const isRemoteProjectRepositoryStep = addProjectCloneFlow?.step === "repository";
+  const remoteProjectProvider =
+    addProjectCloneFlow?.step === "repository"
+      ? addProjectRemoteSourceProvider(addProjectCloneFlow.source)
+      : null;
+  const remoteRepositoriesQuery = useEnvironmentQuery(
+    addProjectCloneFlow?.step === "repository" &&
+      remoteProjectProvider !== null &&
+      canCreateProjectInEnvironment(browseEnvironment?.connection.phase)
+      ? sourceControlEnvironment.repositories({
+          environmentId: addProjectCloneFlow.environmentId,
+          input: { provider: remoteProjectProvider },
+        })
+      : null,
+  );
+  const remoteRepositoriesSupported = remoteRepositoriesQuery.data?.supported === true;
+  const isRemoteRepositoriesPending =
+    addProjectCloneFlow?.step === "repository" &&
+    remoteProjectProvider !== null &&
+    remoteRepositoriesQuery.isPending &&
+    remoteRepositoriesQuery.data === null;
+  const matchedRemoteRepositories = remoteRepositoriesSupported
+    ? filterRemoteRepositories(remoteRepositoriesQuery.data?.repositories ?? [], query)
+    : [];
   const pinnedCloneDirectoryName =
     addProjectCloneFlow?.step === "confirm"
       ? getCloneDirectoryLeafName(
@@ -2187,6 +2214,30 @@ function OpenCommandPaletteDialog(props: {
     );
   }
 
+  function advanceCloneFlowToConfirm(
+    flow: Extract<AddProjectCloneFlow, { readonly step: "repository" }>,
+    repository: SourceControlRepositoryInfo,
+    repositoryInput: string,
+  ): void {
+    const remoteUrl = getDefaultCloneUrl(repository);
+    const destinationPath = getDefaultCloneDestination(
+      flow.environmentId,
+      remoteUrl,
+      repository.nameWithOwner,
+    );
+    setAddProjectCloneFlow({
+      step: "confirm",
+      environmentId: flow.environmentId,
+      source: flow.source,
+      repositoryInput,
+      repository,
+      remoteUrl,
+    });
+    setHighlightedItemValue(null);
+    setQuery(destinationPath);
+    setBrowseGeneration((generation) => generation + 1);
+  }
+
   async function submitAddProjectCloneFlow(destinationPathInput?: string): Promise<void> {
     if (!addProjectCloneFlow) {
       return;
@@ -2271,23 +2322,7 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
       const repository = lookupResult.value;
-      const remoteUrl = getDefaultCloneUrl(repository);
-      const destinationPath = getDefaultCloneDestination(
-        addProjectCloneFlow.environmentId,
-        remoteUrl,
-        repository.nameWithOwner,
-      );
-      setAddProjectCloneFlow({
-        step: "confirm",
-        environmentId: addProjectCloneFlow.environmentId,
-        source: addProjectCloneFlow.source,
-        repositoryInput: rawRepository,
-        repository,
-        remoteUrl,
-      });
-      setHighlightedItemValue(null);
-      setQuery(destinationPath);
-      setBrowseGeneration((generation) => generation + 1);
+      advanceCloneFlowToConfirm(addProjectCloneFlow, repository, rawRepository);
       return;
     }
 
@@ -2578,6 +2613,40 @@ function OpenCommandPaletteDialog(props: {
           },
         ];
 
+  const remoteRepositoryGroups: CommandPaletteView["groups"] =
+    addProjectCloneFlow?.step === "repository" && matchedRemoteRepositories.length > 0
+      ? [
+          {
+            value: "remote-repositories",
+            label: query.trim().length > 0 ? gt("Matching repositories") : gt("Your repositories"),
+            items: matchedRemoteRepositories.map((repo) => ({
+              kind: "action" as const,
+              value: `remote-repo:${repo.nameWithOwner}`,
+              searchTerms: [repo.nameWithOwner],
+              title: repo.nameWithOwner,
+              ...(repo.description ? { description: repo.description } : {}),
+              ...(repo.pushedAt
+                ? { timestamp: formatRelativeTimeLabel(repo.pushedAt, undefined, messages) }
+                : {}),
+              ...(repo.isPrivate
+                ? {
+                    titleTrailingContent: (
+                      <Badge size="sm" variant="outline">
+                        {gt("Private")}
+                      </Badge>
+                    ),
+                  }
+                : {}),
+              icon: remoteProjectSourceIcon(addProjectCloneFlow.source, ITEM_ICON_CLASS),
+              keepOpen: true,
+              run: async () => {
+                advanceCloneFlowToConfirm(addProjectCloneFlow, repo, repo.nameWithOwner);
+              },
+            })),
+          },
+        ]
+      : [];
+
   let displayedGroups: CommandPaletteView["groups"] = filteredGroups;
   if (newProjectFlow !== null) {
     displayedGroups = [
@@ -2586,21 +2655,25 @@ function OpenCommandPaletteDialog(props: {
       ...(newProjectExistingGroup ? [newProjectExistingGroup] : []),
     ];
   } else if (addProjectCloneFlow?.step === "repository") {
-    displayedGroups = [];
+    displayedGroups = remoteRepositoryGroups;
   } else if (addProjectCloneFlow?.step === "confirm") {
     displayedGroups = relativePathNeedsActiveProject ? [] : cloneDestinationBrowseGroups;
   } else if (isBrowsing) {
     displayedGroups = relativePathNeedsActiveProject ? [] : browseGroups;
   }
   const resultRows = buildCommandPaletteRows(displayedGroups);
+  const hasMatchingRemoteRepository =
+    addProjectCloneFlow?.step === "repository" && remoteRepositoryGroups.length > 0;
   const autoHighlightsFirstRow =
-    !isBrowsing && !isRemoteProjectCloneFlow && newProjectFlow === null;
+    (!isBrowsing && !isRemoteProjectCloneFlow && newProjectFlow === null) ||
+    hasMatchingRemoteRepository;
 
   const inputPlaceholder =
     newProjectFlow !== null
       ? gt("Project name")
-      : (remoteProjectInputPlaceholder(addProjectCloneFlow, messages) ??
-        getCommandPaletteInputPlaceholder(paletteMode, messages));
+      : (remoteProjectInputPlaceholder(addProjectCloneFlow, messages, {
+          canSearch: remoteRepositoriesSupported || isRemoteRepositoriesPending,
+        }) ?? getCommandPaletteInputPlaceholder(paletteMode, messages));
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canWriteSourceControl = useEnvironmentScope(
@@ -2645,6 +2718,9 @@ function OpenCommandPaletteDialog(props: {
       ? gt("Continue")
       : gt("Lookup")
     : null;
+  const remoteShortcutLabel = hasMatchingRemoteRepository
+    ? `${submitModifierLabel} Enter`
+    : "Enter";
   const isRemoteProjectPending = isRemoteProjectLookingUp || isRemoteProjectCloning;
   const canSubmitRemoteProjectFlow =
     addProjectCloneFlow?.step === "repository" &&
@@ -2752,8 +2828,22 @@ function OpenCommandPaletteDialog(props: {
     }
 
     if (addProjectCloneFlow?.step === "repository" && event.key === "Enter") {
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+      (event as typeof event & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
       event.preventDefault();
-      void submitAddProjectCloneFlow();
+      event.stopPropagation();
+      const selectedRemoteItem = !isPrimaryModifierPressed(event)
+        ? findHighlightedCommandPaletteItem(
+            displayedGroups,
+            highlightedItemValue ??
+              (autoHighlightsFirstRow ? (resultRows.itemValues[0] ?? null) : null),
+          )
+        : undefined;
+      if (selectedRemoteItem) {
+        executeItem(selectedRemoteItem);
+      } else {
+        void submitAddProjectCloneFlow();
+      }
       return;
     }
 
@@ -3024,9 +3114,15 @@ function OpenCommandPaletteDialog(props: {
       <CommandPaletteSubmitButton
         id={submitButtonId}
         label={isRemoteProjectPending ? gt("Working") : remoteProjectButtonLabel}
-        shortcutLabel="Enter"
-        ariaLabel={gt("{action} (Enter)", { action: remoteProjectButtonLabel ?? gt("Continue") })}
-        tooltip={gt("{action} (Enter)", { action: remoteProjectButtonLabel ?? gt("Continue") })}
+        shortcutLabel={remoteShortcutLabel}
+        ariaLabel={gt("{action} ({shortcut})", {
+          action: remoteProjectButtonLabel ?? gt("Continue"),
+          shortcut: remoteShortcutLabel,
+        })}
+        tooltip={gt("{action} ({shortcut})", {
+          action: remoteProjectButtonLabel ?? gt("Continue"),
+          shortcut: remoteShortcutLabel,
+        })}
         disabled={!canSubmitRemoteProjectFlow}
         onSubmit={() => {
           void submitAddProjectCloneFlow();
@@ -3066,7 +3162,9 @@ function OpenCommandPaletteDialog(props: {
           ? gt("Toggle")
           : gt("Select")
       : addProjectCloneFlow?.step === "repository"
-        ? (remoteProjectButtonLabel ?? gt("Continue"))
+        ? hasMatchingRemoteRepository
+          ? gt("Select")
+          : (remoteProjectButtonLabel ?? gt("Continue"))
         : !canSubmitBrowsePath || hasHighlightedBrowseItem
           ? gt("Select")
           : undefined;
@@ -3097,16 +3195,18 @@ function OpenCommandPaletteDialog(props: {
       footerTrailing={footerTrailing}
       inputAccessory={inputAccessory}
       inputProps={{
-        className: hasHighlightedNewProjectItem
-          ? "*:data-[slot=autocomplete-input]:pe-38!"
-          : addProjectCloneFlow?.step === "repository" || newProjectFlow !== null
-            ? "*:data-[slot=autocomplete-input]:pe-32!"
-            : isBrowsing
-              ? browseInputEndPaddingClass({
-                  willCreateProjectPath,
-                  hasHighlightedBrowseItem,
-                })
-              : undefined,
+        className:
+          hasHighlightedNewProjectItem ||
+          (addProjectCloneFlow?.step === "repository" && hasMatchingRemoteRepository)
+            ? "*:data-[slot=autocomplete-input]:pe-38!"
+            : addProjectCloneFlow?.step === "repository" || newProjectFlow !== null
+              ? "*:data-[slot=autocomplete-input]:pe-32!"
+              : isBrowsing
+                ? browseInputEndPaddingClass({
+                    willCreateProjectPath,
+                    hasHighlightedBrowseItem,
+                  })
+                : undefined,
         placeholder: inputPlaceholder,
         "aria-describedby": inputAccessory ? submitButtonId : undefined,
         ...(isSubmenu
@@ -3186,7 +3286,19 @@ function OpenCommandPaletteDialog(props: {
               emptyStateMessage:
                 addProjectCloneFlow.source === "url"
                   ? gt("Enter a Git clone URL and press Enter to continue.")
-                  : gt("Enter a repository path and press Enter to look it up."),
+                  : isRemoteRepositoriesPending
+                    ? query.trim().length > 0
+                      ? gt("Loading repositories… Press Enter to look up directly.")
+                      : gt("Loading repositories…")
+                    : remoteRepositoriesSupported && query.trim().length > 0
+                      ? gt(
+                          "No matching repositories in your account. Press Enter to look up directly.",
+                        )
+                      : remoteRepositoriesSupported
+                        ? gt(
+                            "No repositories found. Enter a repository path and press Enter to look up.",
+                          )
+                        : gt("Enter a repository path and press Enter to look it up."),
             }
           : addProjectCloneFlow?.step === "confirm"
             ? { emptyStateMessage: gt("Choose a destination path and press Enter to clone.") }

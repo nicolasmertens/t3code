@@ -28,6 +28,7 @@ import {
   type KeybindingCommand,
   type SourceControlDiscoveryResult,
   type SourceControlRepositoryInfo,
+  type SourceControlRepositoryListItem,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
@@ -885,11 +886,20 @@ export type AddProjectCloneFlow =
 export function remoteProjectInputPlaceholder(
   flow: AddProjectCloneFlow | null,
   resolve: MessageResolver = m,
+  options?: { readonly canSearch?: boolean },
 ): string | null {
   if (!flow) return null;
   if (flow.step === "confirm") return null;
   if (flow.source === "url") {
     return resolve(msg("Enter Git clone URL"));
+  }
+  if (options?.canSearch) {
+    return resolve(
+      msg("Search {source} repositories or enter {hint}", {
+        source: addProjectRemoteSourceLabel(flow.source, resolve),
+        hint: addProjectRemoteSourcePathHint(flow.source, resolve),
+      }),
+    );
   }
   return resolve(
     msg("Enter {source} repository ({hint})", {
@@ -897,6 +907,45 @@ export function remoteProjectInputPlaceholder(
       hint: addProjectRemoteSourcePathHint(flow.source, resolve),
     }),
   );
+}
+
+export function filterRemoteRepositories(
+  repositories: ReadonlyArray<SourceControlRepositoryListItem>,
+  query: string,
+): ReadonlyArray<SourceControlRepositoryListItem> {
+  const normalizedQuery = foldSearchQuery(query);
+  if (normalizedQuery.length === 0) {
+    return repositories;
+  }
+  const tokens = normalizedQuery.split(" ");
+  const ranked: Array<{
+    readonly repository: SourceControlRepositoryListItem;
+    readonly score: number;
+    readonly index: number;
+  }> = [];
+
+  for (const [index, repository] of repositories.entries()) {
+    const repoName = repository.nameWithOwner.split("/").at(-1) ?? repository.nameWithOwner;
+    const terms = repository.description
+      ? [repoName, repository.nameWithOwner, repository.description]
+      : [repoName, repository.nameWithOwner];
+    const match = scoreSearchTerms(normalizedQuery, terms, { typos: true });
+    let score: number | null = match ? match.score : null;
+    if (score === null) {
+      const haystack = foldSearchQuery(
+        `${repository.nameWithOwner} ${repository.description ?? ""}`,
+      );
+      if (tokens.every((token) => haystack.includes(token))) {
+        score = 0.1;
+      }
+    }
+    if (score !== null) {
+      ranked.push({ repository, score, index });
+    }
+  }
+
+  ranked.sort((left, right) => right.score - left.score || left.index - right.index);
+  return ranked.map((entry) => entry.repository);
 }
 
 export function buildPaletteRemoteSourceReadiness(

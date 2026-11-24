@@ -1385,3 +1385,109 @@ it.effect(
     );
   },
 );
+
+describe("GitHubSourceControlProvider repository listing", () => {
+  const githubRepo = (
+    fullName: string,
+    options?: {
+      readonly description?: string | null;
+      readonly isPrivate?: boolean;
+      readonly pushedAt?: string | null;
+    },
+  ) => ({
+    full_name: fullName,
+    html_url: `https://github.com/${fullName}`,
+    ssh_url: `git@github.com:${fullName}.git`,
+    description: options?.description ?? null,
+    private: options?.isPrivate ?? false,
+    pushed_at: options?.pushedAt ?? "2026-11-23T00:00:00Z",
+  });
+
+  it.effect("paginates via Link rel=next, deduplicates, and filters by query and limit", () => {
+    const requests: Array<string> = [];
+    const page1 = Array.from({ length: 100 }, (_, index) =>
+      githubRepo(index === 0 ? "nicolasmertens/humble-tools" : `nicolasmertens/repo-${index}`, {
+        description: index === 0 ? "Humble browser tools" : "Other repo",
+        isPrivate: index === 0,
+      }),
+    );
+    const page2 = [
+      githubRepo("nicolasmertens/humble-tools", {
+        description: "Duplicate entry from page 2",
+      }),
+      githubRepo("nicolasmertens/humble-search", {
+        description: "Search across humble tools",
+      }),
+    ];
+
+    return Effect.gen(function* () {
+      const gh = yield* makeProvider({
+        rest: (input) =>
+          Effect.sync(() => {
+            requests.push(`${input.host} ${input.path}`);
+            const page = new URL(`https://api.github.com/${input.path}`).searchParams.get("page");
+            if (page === "1") {
+              return {
+                ...restResponse(page1),
+                headers: {
+                  link: '<https://api.github.com/user/repos?page=2>; rel="next"',
+                },
+              };
+            }
+            return restResponse(page2);
+          }),
+      });
+
+      const allMatches = yield* gh.listRepositories!({
+        cwd: "/workspace",
+        query: "humble tools",
+      });
+      assert.deepStrictEqual(
+        allMatches.map((repo) => repo.nameWithOwner),
+        ["nicolasmertens/humble-tools", "nicolasmertens/humble-search"],
+      );
+      assert.strictEqual(allMatches[0]?.isPrivate, true);
+      assert.strictEqual(allMatches[0]?.description, "Humble browser tools");
+
+      const limited = yield* gh.listRepositories!({
+        cwd: "/workspace",
+        query: "humble tools",
+        limit: 1,
+      });
+      assert.deepStrictEqual(
+        limited.map((repo) => repo.nameWithOwner),
+        ["nicolasmertens/humble-tools"],
+      );
+
+      // Both calls share the 30-second cache so pagination ran only once.
+      assert.strictEqual(requests.length, 2);
+      assert.isTrue(requests[0]!.startsWith("github.com user/repos?"));
+      assert.include(requests[0]!, "page=1");
+      assert.include(requests[1]!, "page=2");
+
+      yield* TestClock.adjust("31 seconds");
+      yield* gh.listRepositories!({ cwd: "/workspace" });
+      assert.strictEqual(requests.length, 4);
+    });
+  });
+
+  it.effect("stops after page 1 when fewer than 100 items or no next link is returned", () => {
+    const requests: Array<string> = [];
+    return Effect.gen(function* () {
+      const gh = yield* makeProvider({
+        rest: (input) =>
+          Effect.sync(() => {
+            requests.push(input.path);
+            return restResponse([githubRepo("nicolasmertens/only-repo")]);
+          }),
+      });
+
+      const repos = yield* gh.listRepositories!({ cwd: "/workspace" });
+      assert.deepStrictEqual(
+        repos.map((repo) => repo.nameWithOwner),
+        ["nicolasmertens/only-repo"],
+      );
+      assert.strictEqual(requests.length, 1);
+    });
+  });
+});

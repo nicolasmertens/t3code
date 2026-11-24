@@ -20,6 +20,9 @@ import {
   type SourceControlPublishRepositoryResult,
   type SourceControlRepositoryCloneUrls,
   type SourceControlRepositoryInfo,
+  type SourceControlRepositoryListInput,
+  type SourceControlRepositoryListItem,
+  type SourceControlRepositoryListResult,
   type SourceControlRepositoryLookupInput,
 } from "@t3tools/contracts";
 
@@ -47,6 +50,9 @@ export class SourceControlRepositoryService extends Context.Service<
     readonly lookupRepository: (
       input: SourceControlRepositoryLookupInput,
     ) => Effect.Effect<SourceControlRepositoryInfo, SourceControlRepositoryError>;
+    readonly listRepositories: (
+      input: SourceControlRepositoryListInput,
+    ) => Effect.Effect<SourceControlRepositoryListResult, SourceControlRepositoryError>;
     readonly prepareClone: (
       input: SourceControlCloneRepositoryInput,
     ) => Effect.Effect<SourceControlPreparedClone, SourceControlRepositoryError>;
@@ -239,6 +245,35 @@ export const make = Effect.gen(function* () {
     },
     // Someone adding or cloning a repository is waiting, so a background rate-limit pause must not
     // refuse the lookup.
+    Effect.provideService(SourceControlRateLimit.Interactive, true),
+  );
+
+  const listRepositories = Effect.fn("SourceControlRepositoryService.listRepositories")(
+    function* (input: SourceControlRepositoryListInput) {
+      const providerKind = yield* ensureConcreteProvider({
+        operation: "listRepositories",
+        provider: input.provider,
+      });
+      const provider = yield* providers.get(providerKind);
+      if (!provider.listRepositories) {
+        return { supported: false, repositories: [] };
+      }
+      const listed = yield* provider.listRepositories({
+        cwd: input.cwd ?? config.cwd,
+        ...(input.query !== undefined ? { query: input.query } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      });
+      const repositories: ReadonlyArray<SourceControlRepositoryListItem> = listed.map((repo) => ({
+        provider: providerKind,
+        nameWithOwner: repo.nameWithOwner,
+        url: repo.url,
+        sshUrl: repo.sshUrl,
+        ...(repo.description !== undefined ? { description: repo.description } : {}),
+        ...(repo.isPrivate !== undefined ? { isPrivate: repo.isPrivate } : {}),
+        ...(repo.pushedAt !== undefined ? { pushedAt: repo.pushedAt } : {}),
+      }));
+      return { supported: true, repositories };
+    },
     Effect.provideService(SourceControlRateLimit.Interactive, true),
   );
 
@@ -622,6 +657,11 @@ export const make = Effect.gen(function* () {
     lookupRepository: Effect.fnUntraced(function* (input) {
       return yield* lookupRepository(input).pipe(
         mapRepositoryError("lookupRepository", input.provider),
+      );
+    }),
+    listRepositories: Effect.fnUntraced(function* (input) {
+      return yield* listRepositories(input).pipe(
+        mapRepositoryError("listRepositories", input.provider),
       );
     }),
     prepareClone: Effect.fnUntraced(function* (input) {

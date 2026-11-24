@@ -473,6 +473,8 @@ import {
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryError,
   SourceControlRepositoryInfo,
+  SourceControlRepositoryListInput,
+  SourceControlRepositoryListResult,
   SourceControlRepositoryLookupInput,
   SourceControlAppAccess,
   SourceControlAppAccessInput,
@@ -714,6 +716,7 @@ export const WS_METHODS = {
   issueTrackersBindProject: "issueTrackers.bindProject",
 
   sourceControlLookupRepository: "sourceControl.lookupRepository",
+  sourceControlListRepositories: "sourceControl.listRepositories",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
   sourceControlSignInStart: "sourceControl.signInStart",
@@ -1540,6 +1543,12 @@ const WsIssueTrackersBindProjectRpc = Rpc.make(WS_METHODS.issueTrackersBindProje
 const WsSourceControlLookupRepositoryRpc = Rpc.make(WS_METHODS.sourceControlLookupRepository, {
   payload: SourceControlRepositoryLookupInput,
   success: SourceControlRepositoryInfo,
+  error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+});
+
+const WsSourceControlListRepositoriesRpc = Rpc.make(WS_METHODS.sourceControlListRepositories, {
+  payload: SourceControlRepositoryListInput,
+  success: SourceControlRepositoryListResult,
   error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
 });
 
@@ -2607,6 +2616,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsLabelCandidatesRpc,
   WsPullRequestsSetLabelsRpc,
   WsSourceControlLookupRepositoryRpc,
+  WsSourceControlListRepositoriesRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsSourceControlSignInStartRpc,
