@@ -1,6 +1,7 @@
 import type { RelayAgentActivityAggregateState } from "@t3tools/contracts/relay";
 import { msg } from "gt-react-native";
 
+import { hasCloudPublicConfig } from "../features/cloud/publicConfig";
 import { m, type MessageResolver } from "../i18n/messages";
 
 import type { AgentActivityProps, AgentActivityText } from "./AgentActivity";
@@ -71,14 +72,20 @@ export function agentActivityWidgetTimeline(
 ) {
   const updatedAt = new Date(now).toISOString();
   if (source.kind !== "snapshot" || !source.aggregate) {
+    const cloudConfigured = hasCloudPublicConfig();
     const props: AgentActivityProps = {
       text: agentActivityText(0, resolve),
-      title: "T3 Code",
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- product name
+      title: "Browne",
       subtitle:
         source.kind === "signed-out"
-          ? resolve(msg("Sign in to {product} to see agents", { product: "T3 Connect" }))
+          ? cloudConfigured
+            ? resolve(msg("Sign in to {product} to see agents", { product: "T3 Connect" }))
+            : resolve(msg("Connect an environment to see agents"))
           : source.kind === "unavailable"
-            ? resolve(msg("Couldn't reach {product}", { product: "T3 Connect" }))
+            ? cloudConfigured
+              ? resolve(msg("Couldn't reach {product}", { product: "T3 Connect" }))
+              : resolve(msg("Couldn't reach environment"))
             : source.kind === "loading"
               ? resolve(msg("Loading agents…"))
               : resolve(msg("No active agents")),

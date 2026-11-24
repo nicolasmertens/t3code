@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+vi.mock("expo-constants", () => ({
+  default: {
+    expoConfig: {
+      extra: {},
+    },
+  },
+}));
 
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { RelayAgentActivityAggregateState } from "@t3tools/contracts/relay";
@@ -28,7 +36,7 @@ function row(phase: Row["phase"], status: string): Row {
 
 function aggregate(activities: ReadonlyArray<Row>): RelayAgentActivityAggregateState {
   return {
-    title: "T3 Code",
+    title: "Browne",
     subtitle: "Agent work in progress",
     activeCount: activities.length,
     updatedAt: "2026-10-18T09:59:00.000Z",
@@ -68,5 +76,15 @@ describe("agentActivityWidgetTimeline", () => {
 
     expect(timeline).toHaveLength(1);
     expect(timeline[0]?.props.activities[0]?.phase).toBe("failed");
+  });
+
+  it("uses Browne direct-mode copy when cloud config is disabled", () => {
+    const signedOut = agentActivityWidgetTimeline({ kind: "signed-out" }, now);
+    const unavailable = agentActivityWidgetTimeline({ kind: "unavailable" }, now);
+
+    expect(signedOut[0]?.props.title).toBe("Browne");
+    expect(signedOut[0]?.props.subtitle).toBe("Connect an environment to see agents");
+    expect(unavailable[0]?.props.title).toBe("Browne");
+    expect(unavailable[0]?.props.subtitle).toBe("Couldn't reach environment");
   });
 });

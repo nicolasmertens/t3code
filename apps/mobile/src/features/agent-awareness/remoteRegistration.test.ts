@@ -35,9 +35,12 @@ import {
 import { MobileSecureStorageError } from "../../persistence/mobile-secure-storage";
 import * as MobileStorage from "../../persistence/mobile-storage";
 import { makeRelayDeviceRegistrationRequest } from "./registrationPayload";
+import { __resetDirectPushTargetsForTest, setDirectPushTargets } from "./directPushClient";
 import {
   __resetAgentAwarenessRemoteRegistrationForTest,
+  activateDirectPushAgentAwareness,
   agentAwarenessNotificationsReady,
+  deactivateDirectPushAgentAwareness,
   getAgentAwarenessRegistrationStatus,
   refreshActiveLiveActivityRemoteRegistration,
   refreshAgentAwarenessRegistration,
@@ -1267,6 +1270,148 @@ describe("makeRelayDeviceRegistrationRequest", () => {
 
         expect(widgetMocks.start).not.toHaveBeenCalled();
       }),
+    );
+  });
+
+  describe("direct push mode", () => {
+    it.effect(
+      "registers device with explicit sandbox apsEnvironment and Live Activity tokens without relay config",
+      () => {
+        const requests: Array<{
+          readonly path: string;
+          readonly auth: string | null;
+          readonly body: unknown;
+        }> = [];
+        Constants.expoConfig!.extra = {
+          appVariant: "production",
+          apsEnvironment: "sandbox",
+        };
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          if (url.pathname === "/api/direct-push/agent-activity") {
+            return Response.json({ aggregate: null });
+          }
+          const headers = new Headers(init?.headers);
+          requests.push({
+            path: url.pathname,
+            auth: headers.get("authorization"),
+            body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+          });
+          return Response.json({ ok: true });
+        });
+        setDirectPushTargets([
+          {
+            environmentId: "env-direct" as EnvironmentId,
+            httpBaseUrl: "https://direct.ts.net",
+            httpAuthorization: { _tag: "Bearer", token: "direct-tok" },
+            bearerToken: "direct-tok",
+          },
+        ]);
+        activateDirectPushAgentAwareness("env-direct@https://direct.ts.net");
+        const activity = {
+          getId: () => "activity-direct-1",
+          getPushToken: vi.fn(() => Promise.resolve("direct-la-tok")),
+          addPushTokenListener: vi.fn(() => ({ remove: vi.fn() })),
+        };
+
+        return Effect.gen(function* () {
+          yield* refreshAgentAwarenessRegistration();
+          const liveRegistered = yield* registerLiveActivityPushToken({
+            activity: activity as never,
+          });
+
+          expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
+          expect(liveRegistered).toBe(true);
+          expect(requests).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                path: "/api/direct-push/devices",
+                auth: "Bearer direct-tok",
+                body: expect.objectContaining({
+                  apsEnvironment: "sandbox",
+                }),
+              }),
+              expect.objectContaining({
+                path: "/api/direct-push/live-activities",
+                auth: "Bearer direct-tok",
+                body: expect.objectContaining({
+                  activityPushToken: "direct-la-tok",
+                }),
+              }),
+            ]),
+          );
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              __resetDirectPushTargetsForTest();
+              __resetAgentAwarenessRemoteRegistrationForTest();
+            }),
+          ),
+          Effect.provide(layerRelayTest),
+        );
+      },
+    );
+
+    it.effect(
+      "publishes direct snapshot to the widget and clears registration on deactivate",
+      () => {
+        const snapshotAggregate: RelayAgentActivityAggregateState = {
+          title: "Browne",
+          subtitle: "Agent work in progress",
+          activeCount: 1,
+          updatedAt: "2026-11-24T12:00:00.000Z",
+          activities: [
+            {
+              environmentId: "env-direct" as EnvironmentId,
+              threadId: "thread-direct-1" as ThreadId,
+              projectTitle: "browne",
+              threadTitle: "Direct task",
+              modelTitle: "GPT-5",
+              phase: "running",
+              status: "Running",
+              updatedAt: "2026-11-24T12:00:00.000Z",
+              deepLink: "/threads/env-direct/thread-direct-1",
+            },
+          ],
+        };
+        Constants.expoConfig!.extra = { appVariant: "production" };
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          if (url.pathname === "/api/direct-push/agent-activity") {
+            return Response.json({ aggregate: snapshotAggregate });
+          }
+          return Response.json({ ok: true });
+        });
+        setDirectPushTargets([
+          {
+            environmentId: "env-direct" as EnvironmentId,
+            httpBaseUrl: "https://direct.ts.net",
+            httpAuthorization: { _tag: "Bearer", token: "direct-tok" },
+            bearerToken: "direct-tok",
+          },
+        ]);
+        activateDirectPushAgentAwareness("env-direct@https://direct.ts.net");
+
+        return Effect.gen(function* () {
+          yield* refreshActiveLiveActivityRemoteRegistration();
+          expect(publishWidgetMock).toHaveBeenCalledWith({
+            kind: "snapshot",
+            aggregate: snapshotAggregate,
+          });
+
+          deactivateDirectPushAgentAwareness();
+          expect(getAgentAwarenessRegistrationStatus()).toBe("unknown");
+          expect(publishWidgetMock).toHaveBeenLastCalledWith({ kind: "signed-out" });
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              __resetDirectPushTargetsForTest();
+              __resetAgentAwarenessRemoteRegistrationForTest();
+            }),
+          ),
+          Effect.provide(layerRelayTest),
+        );
+      },
     );
   });
 });

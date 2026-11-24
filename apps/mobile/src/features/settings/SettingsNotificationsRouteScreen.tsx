@@ -25,7 +25,6 @@ import { Linking, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { m as resolveMessage } from "../../i18n/messages";
 
-import { AppText as Text } from "../../components/ui/AppText";
 import {
   createEnvironmentCommand,
   isAtomCommandInterrupted,
@@ -49,6 +48,7 @@ import {
   getAgentAwarenessRegistrationStatus,
   refreshAgentAwarenessRegistration,
   subscribeAgentAwarenessRegistrationStatus,
+  updateAgentAwarenessRegistrationPreferences,
 } from "../agent-awareness/remoteRegistration";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import {
@@ -188,23 +188,343 @@ function useNotificationsReady(): boolean {
 }
 
 export function SettingsNotificationsRouteScreen() {
-  const gt = useGT();
   if (!hasCloudPublicConfig()) {
-    return (
-      <SettingsScreen title={gt("Notifications")}>
-        <ScrollView
-          contentInsetAdjustmentBehavior="automatic"
-          contentContainerClassName="px-5 pt-4"
-        >
-          <Text className="text-base text-foreground-muted">
-            {gt("Notifications require {product} in this app build.", { product: "T3 Connect" })}
-          </Text>
-        </ScrollView>
-      </SettingsScreen>
-    );
+    return <DirectSettingsNotificationsRouteScreen />;
   }
 
   return <ConfiguredSettingsNotificationsRouteScreen />;
+}
+
+async function requestDeviceNotificationsPermission(input: {
+  readonly gt: ReturnType<typeof useGT>;
+  readonly setNotificationStatus: (status: NotificationStatus) => void;
+  readonly unregisteredMessage: string;
+}): Promise<void> {
+  const { gt, setNotificationStatus, unregisteredMessage } = input;
+  const result = await settleAsyncResult(() =>
+    runtime.runPromiseExit(
+      requestAgentNotificationPermission.pipe(
+        Effect.tap((permission) =>
+          permission.type === "granted" ? refreshAgentAwarenessRegistration() : Effect.void,
+        ),
+      ),
+    ),
+  );
+  if (result._tag === "Failure") {
+    if (!isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      Dialog.alert(
+        gt("Notifications unavailable"),
+        error instanceof Error
+          ? (errorDisplayMessage(error, resolveMessage) ?? error.message)
+          : gt("Could not request notification permission."),
+      );
+    }
+    return;
+  }
+  if (result.value.type === "granted") {
+    setNotificationStatus("enabled");
+    if (!agentAwarenessNotificationsReady()) {
+      Dialog.alert(gt("Couldn't finish enabling notifications"), unregisteredMessage);
+    }
+    return;
+  }
+  if (result.value.type === "unsupported") {
+    setNotificationStatus("unsupported");
+    Dialog.alert(
+      gt("Notifications unavailable"),
+      gt("Agent notifications are unavailable on this platform."),
+    );
+    return;
+  }
+  setNotificationStatus("disabled");
+  if (result.value.canAskAgain) {
+    Dialog.alert(gt("Notifications disabled"), gt("Notifications were not enabled."));
+    return;
+  }
+  Dialog.alert(
+    gt("Notifications disabled"),
+    gt("Notifications were denied for this app. Open Settings to enable them."),
+    [
+      { text: gt("Cancel"), style: "cancel" },
+      { text: gt("Open Settings"), onPress: () => void Linking.openSettings() },
+    ],
+  );
+}
+
+function showDisableNotificationsDialog(gt: ReturnType<typeof useGT>): void {
+  Dialog.alert(
+    gt("Disable notifications"),
+    gt("Open system Settings to disable notifications for {product}.", { product: "Browne" }),
+    [
+      { text: gt("Cancel"), style: "cancel" },
+      { text: gt("Open Settings"), onPress: () => void Linking.openSettings() },
+    ],
+  );
+}
+
+async function ensureAndroidLiveActivityPermission(input: {
+  readonly gt: ReturnType<typeof useGT>;
+  readonly setNotificationStatus: (status: NotificationStatus) => void;
+}): Promise<boolean> {
+  if (Platform.OS !== "android") return true;
+  const { gt, setNotificationStatus } = input;
+  const permission = await settleAsyncResult(() =>
+    runtime.runPromiseExit(requestAgentNotificationPermission),
+  );
+  if (permission._tag === "Failure") {
+    const error = squashAtomCommandFailure(permission);
+    Dialog.alert(
+      gt("Ongoing activity unavailable"),
+      error instanceof Error
+        ? (errorDisplayMessage(error, resolveMessage) ?? error.message)
+        : gt("Could not enable agent notifications."),
+    );
+    return false;
+  }
+  if (permission.value.type !== "granted") {
+    Dialog.alert(
+      gt("Notification permission needed"),
+      gt("Enable notifications in system Settings to show ongoing agent activity."),
+      [
+        { text: gt("Cancel"), style: "cancel" },
+        { text: gt("Open Settings"), onPress: () => void Linking.openSettings() },
+      ],
+    );
+    return false;
+  }
+  setNotificationStatus("enabled");
+  return true;
+}
+
+function NotificationsSettingsBody(props: {
+  readonly gt: ReturnType<typeof useGT>;
+  readonly agentAwarenessPlatform: ReturnType<typeof resolveAgentAwarenessPlatformPresentation>;
+  readonly agentAwarenessPushAvailable: boolean;
+  readonly agentAwarenessSubtitle: string | undefined;
+  readonly notificationStatus: NotificationStatus;
+  readonly notificationsReady: boolean;
+  readonly liveActivitySwitchDisabled: boolean;
+  readonly liveActivityStatus: LiveActivityStatus;
+  readonly deviceRegistered: boolean;
+  readonly showClearPreferenceRow: boolean;
+  readonly onDeviceNotificationsChange: (enabled: boolean) => void;
+  readonly onLiveActivitiesChange: (enabled: boolean) => void;
+}) {
+  const { gt } = props;
+  const insets = useSafeAreaInsets();
+  return (
+    <SettingsScreen title={gt("Notifications")}>
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        className="flex-1"
+        contentContainerClassName="gap-6 px-5 pt-4"
+        contentContainerStyle={{
+          paddingBottom: Math.max(insets.bottom, 18) + 18,
+        }}
+      >
+        <SettingsSection title={gt("Agent activity")}>
+          <SettingsSwitchRow
+            icon="bell.badge"
+            label={gt("Device Notifications")}
+            disabled={
+              !props.agentAwarenessPlatform.supported ||
+              !props.agentAwarenessPushAvailable ||
+              props.notificationStatus === "checking" ||
+              props.notificationStatus === "unsupported"
+            }
+            subtitle={props.agentAwarenessSubtitle}
+            value={
+              props.agentAwarenessPushAvailable &&
+              props.notificationStatus === "enabled" &&
+              props.notificationsReady
+            }
+            onValueChange={props.onDeviceNotificationsChange}
+          />
+          <SettingsSwitchRow
+            disabled={props.liveActivitySwitchDisabled}
+            icon="bolt.circle"
+            label={
+              Platform.OS === "android"
+                ? supportsAndroidLiveUpdateSettings()
+                  ? gt("Agent Live Updates")
+                  : gt("Ongoing Agent Activity")
+                : gt("Live Activity Updates")
+            }
+            subtitle={props.agentAwarenessSubtitle}
+            value={
+              props.agentAwarenessPushAvailable &&
+              (props.liveActivityStatus === "enabled" || props.liveActivityStatus === "linking") &&
+              props.deviceRegistered
+            }
+            onValueChange={props.onLiveActivitiesChange}
+          />
+          {props.showClearPreferenceRow ? (
+            <SettingsRow
+              icon="bolt.circle"
+              label={gt("Turn off Live Activity preference")}
+              onPress={() => props.onLiveActivitiesChange(false)}
+            />
+          ) : null}
+          {supportsAndroidLiveUpdateSettings() ? (
+            <SettingsRow
+              icon="bolt.circle"
+              label={gt("Live Update Settings")}
+              onPress={() => {
+                void openAndroidLiveUpdateSettings().catch(() => {
+                  Dialog.alert(
+                    gt("Couldn't open Settings"),
+                    gt(
+                      "Open Android Settings, select {product}, then enable Live Updates in Notifications.",
+                      { product: "Browne" },
+                    ),
+                  );
+                });
+              }}
+            />
+          ) : null}
+        </SettingsSection>
+      </ScrollView>
+    </SettingsScreen>
+  );
+}
+
+function DirectSettingsNotificationsRouteScreen() {
+  const gt = useGT();
+  const m = useMessages();
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const agentAwarenessPushAvailable = supportsAgentAwarenessPush();
+  const agentAwarenessPlatform = resolveAgentAwarenessPlatformPresentation(Platform.OS, m);
+  const agentAwarenessSubtitle =
+    Platform.OS === "android" && !agentAwarenessPushAvailable
+      ? gt("Install a newer app build to enable notifications")
+      : agentAwarenessPlatform.subtitle;
+  const { savedConnectionsById } = useSavedRemoteConnections();
+  const notificationStatus = useAtomValue(notificationStatusAtom);
+  const setNotificationStatus = useAtomSet(notificationStatusAtom);
+  const [liveActivityOverride, setLiveActivityOverride] = useState<{
+    readonly status: LiveActivityStatus;
+    readonly basis: unknown;
+  } | null>(null);
+  const baseLiveActivityStatus: LiveActivityStatus = AsyncResult.isFailure(preferencesResult)
+    ? "enabled"
+    : !AsyncResult.isSuccess(preferencesResult)
+      ? "checking"
+      : preferencesResult.value.liveActivitiesEnabled === false
+        ? "disabled"
+        : "enabled";
+  const liveActivityStatus =
+    liveActivityOverride !== null && liveActivityOverride.basis === preferencesResult
+      ? liveActivityOverride.status
+      : baseLiveActivityStatus;
+  const setLiveActivityStatus = (status: LiveActivityStatus) =>
+    setLiveActivityOverride({ status, basis: preferencesResult });
+  const liveActivityWriteInFlight = useRef(false);
+  const deviceRegistered = useDeviceRegistered();
+  const notificationsReady = useNotificationsReady();
+  const environmentCount = Object.keys(savedConnectionsById).length;
+
+  const handleDeviceNotificationsChange = (enabled: boolean) => {
+    if (!enabled) {
+      showDisableNotificationsDialog(gt);
+      return;
+    }
+    void requestDeviceNotificationsPermission({
+      gt,
+      setNotificationStatus,
+      unregisteredMessage:
+        environmentCount > 0
+          ? gt(
+              "Notification access was granted, but this device could not register for direct notifications with a connected environment yet.",
+            )
+          : gt(
+              "Notification access was granted. Connect an environment to start receiving notifications.",
+            ),
+    });
+  };
+
+  const handleLiveActivitiesChange = async (enabled: boolean) => {
+    if (liveActivityWriteInFlight.current) return;
+    liveActivityWriteInFlight.current = true;
+    setLiveActivityStatus("linking");
+    try {
+      if (enabled && !(await ensureAndroidLiveActivityPermission({ gt, setNotificationStatus }))) {
+        setLiveActivityStatus("disabled");
+        return;
+      }
+      const updateResult = await settleAsyncResult(() =>
+        runtime.runPromiseExit(
+          Effect.gen(function* () {
+            yield* saveLocalPreference(enabled);
+            yield* updateAgentAwarenessRegistrationPreferences({ liveActivitiesEnabled: enabled });
+          }),
+        ),
+      );
+      if (updateResult._tag === "Failure") {
+        setLiveActivityStatus(enabled ? "disabled" : "enabled");
+        if (!isAtomCommandInterrupted(updateResult)) {
+          const error = squashAtomCommandFailure(updateResult);
+          Dialog.alert(
+            Platform.OS === "android"
+              ? gt("Ongoing activity unavailable")
+              : gt("Live Activities unavailable"),
+            error instanceof Error
+              ? (errorDisplayMessage(error, resolveMessage) ?? error.message)
+              : gt("Could not update agent activity updates."),
+          );
+        }
+        return;
+      }
+      setLiveActivityStatus(enabled ? "enabled" : "disabled");
+      if (!enabled) {
+        return;
+      }
+      if (getAgentAwarenessRegistrationStatus() === "registered") {
+        Dialog.alert(
+          Platform.OS === "android"
+            ? gt("Ongoing activity enabled")
+            : gt("Live Activities enabled"),
+          gt("Direct agent activity updates are enabled for your connected environments."),
+        );
+      } else {
+        Dialog.alert(
+          gt("Couldn't finish enabling activity updates"),
+          environmentCount > 0
+            ? gt(
+                "Preference saved, waiting for an environment that supports direct push notifications.",
+              )
+            : gt(
+                "Agent activity updates are enabled. Connect an environment to start receiving updates.",
+              ),
+        );
+      }
+    } finally {
+      liveActivityWriteInFlight.current = false;
+    }
+  };
+
+  return (
+    <NotificationsSettingsBody
+      gt={gt}
+      agentAwarenessPlatform={agentAwarenessPlatform}
+      agentAwarenessPushAvailable={agentAwarenessPushAvailable}
+      agentAwarenessSubtitle={agentAwarenessSubtitle}
+      notificationStatus={notificationStatus}
+      notificationsReady={notificationsReady}
+      liveActivitySwitchDisabled={
+        !agentAwarenessPlatform.supported ||
+        !agentAwarenessPushAvailable ||
+        liveActivityStatus === "checking" ||
+        liveActivityStatus === "linking"
+      }
+      liveActivityStatus={liveActivityStatus}
+      deviceRegistered={deviceRegistered}
+      showClearPreferenceRow={false}
+      onDeviceNotificationsChange={handleDeviceNotificationsChange}
+      onLiveActivitiesChange={(enabled) => void handleLiveActivitiesChange(enabled)}
+    />
+  );
 }
 
 function ConfiguredSettingsNotificationsRouteScreen() {
@@ -458,7 +778,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
 
     Dialog.alert(
       gt("Disable notifications"),
-      gt("Open system Settings to disable notifications for {product}.", { product: "T3 Code" }),
+      gt("Open system Settings to disable notifications for {product}.", { product: "Browne" }),
       [
         { text: gt("Cancel"), style: "cancel" },
         { text: gt("Open Settings"), onPress: () => void Linking.openSettings() },
@@ -619,7 +939,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
                     gt("Couldn't open Settings"),
                     gt(
                       "Open Android Settings, select {product}, then enable Live Updates in Notifications.",
-                      { product: "T3 Code" },
+                      { product: "Browne" },
                     ),
                   );
                 });

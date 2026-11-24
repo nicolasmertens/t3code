@@ -48,6 +48,12 @@ import {
 } from "./agentLiveActivity";
 import { resolveCloudPublicConfig } from "../cloud/publicConfig";
 import { supportsAgentAwarenessPush } from "./capabilities";
+import {
+  readAgentActivitySnapshotDirect,
+  registerDeviceDirect,
+  registerLiveActivityDirect,
+  unregisterDeviceDirect,
+} from "./directPushClient";
 import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
 
 const REMOTE_ACTIVITY_REGISTRATION_RETRY_MS = 15_000;
@@ -145,6 +151,8 @@ export function subscribeAgentAwarenessRegistrationStatus(listener: () => void):
 let activeLiveActivityRegistrationRetry: ReturnType<typeof setTimeout> | null = null;
 let relayTokenProvider: (() => Promise<string | null>) | null = null;
 let relayTokenProviderIdentity: string | null = null;
+let directPushActive = false;
+let directPushIdentity: string | null = null;
 let deviceRegistrationGeneration = 0;
 let activeDeviceRegistration: {
   readonly input: DeviceRegistrationInput;
@@ -177,6 +185,14 @@ function readRelayConfig(): { readonly url: string } | null {
   }
 
   return { url: relayUrl };
+}
+
+function isAgentAwarenessRemoteActive(): boolean {
+  return relayTokenProvider !== null || directPushActive;
+}
+
+function isDirectPushMode(): boolean {
+  return readRelayConfig() === null && directPushActive;
 }
 
 function canRegisterRemoteLiveActivities(): boolean {
@@ -255,6 +271,86 @@ export function setAgentAwarenessRelayTokenProvider(
 export function releaseAgentAwarenessRelayTokenProvider(): void {
   relayTokenProvider = null;
   relayTokenProviderIdentity = null;
+  directPushActive = false;
+  directPushIdentity = null;
+  deviceRegistrationGeneration++;
+  activeDeviceRegistration = null;
+  pendingDeviceRegistration = null;
+  androidDeviceReplayedAt = null;
+  pushTokenSubscription?.remove();
+  pushTokenSubscription = null;
+  appStateSubscription?.remove();
+  appStateSubscription = null;
+  if (activeLiveActivityRegistrationRetry) {
+    clearTimeout(activeLiveActivityRegistrationRetry);
+    activeLiveActivityRegistrationRetry = null;
+  }
+}
+
+export function activateDirectPushAgentAwareness(identity: string): void {
+  const isExistingIdentity = directPushActive && directPushIdentity === identity;
+  if (!isExistingIdentity) {
+    if (directPushIdentity && identity !== directPushIdentity) {
+      clearAndroidAgentNotifications();
+    }
+    publishWidget({ kind: "loading" });
+    androidDeviceReplayedAt = null;
+    deviceRegistrationGeneration++;
+    activeDeviceRegistration = null;
+    pendingDeviceRegistration = null;
+    registeredActivityPushTokens.clear();
+  }
+  directPushActive = true;
+  directPushIdentity = identity;
+  ensurePushTokenListener();
+  ensureAppStateListener();
+  runRegistrationInBackground(
+    refreshActiveLiveActivityRemoteRegistration(),
+    "active live activity registration after direct environment connect failed",
+  );
+  if (isExistingIdentity) {
+    if (registrationStatus !== "registered") {
+      enqueueDeviceRegistration(
+        {},
+        "device registration retry after direct environment connect failed",
+      );
+    }
+    return;
+  }
+  enqueueDeviceRegistration({}, "device registration after direct environment connect failed");
+}
+
+export function deactivateDirectPushAgentAwareness(): void {
+  if (!directPushActive && directPushIdentity === null) {
+    return;
+  }
+  directPushActive = false;
+  directPushIdentity = null;
+  deviceRegistrationGeneration++;
+  activeDeviceRegistration = null;
+  pendingDeviceRegistration = null;
+  androidDeviceReplayedAt = null;
+  registeredActivityPushTokens.clear();
+  clearAndroidAgentNotifications();
+  pushTokenSubscription?.remove();
+  pushTokenSubscription = null;
+  appStateSubscription?.remove();
+  appStateSubscription = null;
+  if (activeLiveActivityRegistrationRetry) {
+    clearTimeout(activeLiveActivityRegistrationRetry);
+    activeLiveActivityRegistrationRetry = null;
+  }
+  endLocalLiveActivities("live activity cleanup after disconnecting environments failed");
+  publishWidget({ kind: "signed-out" });
+  setRegistrationStatus("unknown");
+  void clearAgentAwarenessRegistrationRecord().catch((error: unknown) => {
+    logRegistrationError("clear direct push registration record failed", error);
+  });
+}
+
+export function releaseDirectPushAgentAwareness(): void {
+  directPushActive = false;
+  directPushIdentity = null;
   deviceRegistrationGeneration++;
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;
@@ -395,7 +491,57 @@ const registerDeviceWithRelay = Effect.fn("remoteRegistration.registerDeviceWith
   }
   const relayConfig = readRelayConfig();
   if (!relayConfig) {
-    setRegistrationStatus("unknown");
+    if (!directPushActive) {
+      setRegistrationStatus("unknown");
+      return;
+    }
+    const identity = `direct:${directPushIdentity ?? ""}`;
+    const storage = yield* MobileStorage.MobileStorage;
+    const persisted = yield* storage.loadAgentAwarenessRegistrationRecord.pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentAwarenessOperationError({ operation: "load-registration-record", cause }),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+    if (expectedGeneration !== deviceRegistrationGeneration) {
+      return;
+    }
+    const signature = `direct|${directPushIdentity ?? ""}|${registrationSignature(body)}`;
+    const now = yield* Clock.currentTimeMillis;
+    const needsAndroidReplay =
+      body.platform === "android" &&
+      (androidDeviceReplayedAt === null ||
+        now - androidDeviceReplayedAt >= ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS);
+    if (
+      persisted &&
+      persisted.identity === identity &&
+      persisted.signature === signature &&
+      !needsAndroidReplay
+    ) {
+      setRegistrationStatus("registered", Boolean(body.pushToken));
+      return;
+    }
+
+    const registered = yield* registerDeviceDirect(body);
+    if (expectedGeneration !== deviceRegistrationGeneration) {
+      return;
+    }
+    if (!registered) {
+      if (registrationStatus !== "registered") {
+        setRegistrationStatus("failed");
+      }
+      return;
+    }
+    if (body.platform === "android") androidDeviceReplayedAt = yield* Clock.currentTimeMillis;
+    setRegistrationStatus("registered", Boolean(body.pushToken));
+    yield* storage.saveAgentAwarenessRegistrationRecord({ identity, signature }).pipe(
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          logRegistrationError("persist registration record failed", error);
+        }),
+      ),
+    );
     return;
   }
   const token = yield* relayToken("read-device-registration-relay-token");
@@ -467,7 +613,12 @@ const unregisterDeviceWithRelay = Effect.fn("remoteRegistration.unregisterDevice
     readonly deviceId: string;
     readonly tokenProvider: () => Promise<string | null>;
   }): Effect.fn.Return<void, AgentAwarenessRegistrationError, ManagedRelay.ManagedRelayClient> {
-    if (!readRelayConfig()) return;
+    if (!readRelayConfig()) {
+      if (isDirectPushMode()) {
+        yield* unregisterDeviceDirect(input.deviceId);
+      }
+      return;
+    }
     const token = yield* Effect.tryPromise({
       try: input.tokenProvider,
       catch: (cause) =>
@@ -500,7 +651,7 @@ export function armAgentAwarenessLiveActivityForLocalWork(input: {
   readonly threadTitle: string;
   readonly projectTitle: string;
 }): void {
-  if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
+  if (!canRegisterRemoteLiveActivities() || !isAgentAwarenessRemoteActive()) {
     return;
   }
   if (!environmentPublishesAgentActivity(input.environmentId)) {
@@ -528,7 +679,8 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
     const activity = startAgentLiveActivity(
       {
         text: agentActivityText(1, m),
-        title: "T3 Code",
+        // oxlint-disable-next-line t3code/no-untranslated-copy -- product name
+        title: "Browne",
         subtitle: m(msg("Agent work in progress")),
         activeCount: 1,
         updatedAt: nowIso,
@@ -566,7 +718,9 @@ const readAgentActivitySnapshot: () => Effect.Effect<
   ManagedRelay.ManagedRelayClient
 > = Effect.fn("remoteRegistration.readAgentActivitySnapshot")(
   function* () {
-    if (!readRelayConfig()) return null;
+    if (!readRelayConfig()) {
+      return isDirectPushMode() ? yield* readAgentActivitySnapshotDirect() : null;
+    }
     const token = yield* relayToken("read-live-activity-registration-relay-token");
     if (!token) {
       return null;
@@ -586,7 +740,9 @@ const registerLiveActivityWithRelay = Effect.fn("remoteRegistration.registerLive
   function* (
     body: RelayLiveActivityRegistrationRequest,
   ): Effect.fn.Return<boolean, AgentAwarenessRegistrationError, ManagedRelay.ManagedRelayClient> {
-    if (!readRelayConfig()) return false;
+    if (!readRelayConfig()) {
+      return isDirectPushMode() ? yield* registerLiveActivityDirect(body) : false;
+    }
     const token = yield* relayToken("read-live-activity-registration-relay-token");
     if (!token) {
       return false;
@@ -728,10 +884,15 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
     input.preferencesOverride,
   );
   if (expectedGeneration !== deviceRegistrationGeneration) return;
-  if (relayTokenProvider && relayTokenProviderIdentity) {
+  const remoteIdentity = relayTokenProvider
+    ? relayTokenProviderIdentity
+    : directPushActive
+      ? directPushIdentity
+      : null;
+  if (remoteIdentity) {
     configureAndroidAgentNotifications(
       deviceId,
-      relayTokenProviderIdentity,
+      remoteIdentity,
       preferences.liveActivitiesEnabled !== false,
     );
   }
@@ -757,7 +918,12 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
       appVersion: Constants.expoConfig?.version,
       ...(bundleId ? { bundleId } : {}),
       ...(Platform.OS === "ios"
-        ? { apsEnvironment: resolveApsEnvironment(Constants.expoConfig?.extra?.appVariant) }
+        ? {
+            apsEnvironment: resolveApsEnvironment(
+              Constants.expoConfig?.extra?.appVariant,
+              Constants.expoConfig?.extra?.apsEnvironment,
+            ),
+          }
         : {}),
       ...(pushTokenRegistration.pushToken ? { pushToken: pushTokenRegistration.pushToken } : {}),
       notificationsEnabled: pushTokenRegistration.notificationsEnabled,
@@ -886,6 +1052,8 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   }
   relayTokenProvider = null;
   relayTokenProviderIdentity = null;
+  directPushActive = false;
+  directPushIdentity = null;
   deviceRegistrationGeneration++;
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;
@@ -1009,7 +1177,7 @@ const registerLiveActivityPushTokenValue = Effect.fn(
 });
 
 function scheduleActiveLiveActivityRegistrationRetry(): void {
-  if (activeLiveActivityRegistrationRetry || !relayTokenProvider) {
+  if (activeLiveActivityRegistrationRetry || !isAgentAwarenessRemoteActive()) {
     return;
   }
 
@@ -1025,7 +1193,7 @@ function scheduleActiveLiveActivityRegistrationRetry(): void {
 export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
   "remoteRegistration.refreshActiveLiveActivityRemoteRegistration",
 )(function* (): Effect.fn.Return<void, never, AgentAwarenessRegistrationServices> {
-  if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
+  if (!canRegisterRemoteLiveActivities() || !isAgentAwarenessRemoteActive()) {
     return;
   }
 
@@ -1035,7 +1203,7 @@ export const refreshActiveLiveActivityRemoteRegistration = Effect.fn(
   // shown or primed.
   const generation = deviceRegistrationGeneration;
   const isCurrentAccount = () =>
-    relayTokenProvider !== null && deviceRegistrationGeneration === generation;
+    isAgentAwarenessRemoteActive() && deviceRegistrationGeneration === generation;
   let read = 0;
   const isNewestRead = () => isCurrentAccount() && read === widgetSnapshotReads;
   const refreshWidget = Effect.gen(function* () {

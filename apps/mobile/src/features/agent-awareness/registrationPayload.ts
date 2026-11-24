@@ -3,8 +3,14 @@ import type { RelayDeviceRegistrationRequest } from "@t3tools/contracts/relay";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import { supportsAgentAwarenessPush } from "./capabilities";
 
-// Development builds use sandbox APNs; distribution builds use production APNs.
-export function resolveApsEnvironment(appVariant: unknown): "sandbox" | "production" {
+// Development builds (or explicit development APNs entitlements) use sandbox APNs; distribution builds use production APNs.
+export function resolveApsEnvironment(
+  appVariant: unknown,
+  explicitApsEnvironment?: unknown,
+): "sandbox" | "production" {
+  if (explicitApsEnvironment === "sandbox" || explicitApsEnvironment === "production") {
+    return explicitApsEnvironment;
+  }
   return appVariant === "development" ? "sandbox" : "production";
 }
 
