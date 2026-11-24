@@ -162,6 +162,87 @@ describe("AntigravityAdapterV2 flavor", () => {
       outcome: { outcome: "selected", optionId: "opt-dev" },
     });
   });
+
+  it("folds Antigravity ask_question elicitation pairs into custom-answerable questions", () => {
+    const form = flavor.extractElicitationForm?.({
+      mode: "form",
+      sessionId: "session-1",
+      message: "The agent has 2 questions.",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          q1: {
+            type: "string",
+            title: "Which provider lane?",
+            oneOf: [
+              { const: "1", title: "Codex" },
+              { const: "2", title: "Anthropic" },
+            ],
+          },
+          q1_other: {
+            type: "string",
+            title: "Other",
+            description: "Optional free-form answer to: Which provider lane?",
+          },
+          q2: {
+            type: "array",
+            title: "Which fallback models?",
+            items: {
+              anyOf: [
+                { const: "1", title: "Luna" },
+                { const: "2", title: "Sol" },
+              ],
+            },
+          },
+          q2_other: {
+            type: "string",
+            title: "Other",
+            description: "Optional free-form answer to: Which fallback models?",
+          },
+        },
+      },
+    });
+
+    assert.isDefined(form);
+    assert.deepEqual(
+      form?.questions.map((question) => ({
+        id: question.id,
+        header: question.header,
+        question: question.question,
+        multiSelect: question.multiSelect,
+        allowCustomAnswer: question.allowCustomAnswer,
+      })),
+      [
+        {
+          id: "q1",
+          header: "Question 1",
+          question: "Which provider lane?",
+          multiSelect: undefined,
+          allowCustomAnswer: undefined,
+        },
+        {
+          id: "q2",
+          header: "Question 2",
+          question: "Which fallback models?",
+          multiSelect: true,
+          allowCustomAnswer: undefined,
+        },
+      ],
+    );
+    assert.deepEqual(
+      form?.respond({
+        q1: "Codex without Qwen 3.8",
+        q2: ["1", "2"],
+      }),
+      {
+        action: "accept",
+        content: {
+          q1_other: "Codex without Qwen 3.8",
+          q2: ["1", "2"],
+        },
+      },
+    );
+  });
 });
 
 const layerSession = Layer.mergeAll(
