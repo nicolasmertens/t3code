@@ -42,6 +42,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as DirectApnsService from "../push/DirectApnsService.ts";
 import * as AgentAwarenessRelay from "./AgentAwarenessRelay.ts";
 
 const THREAD_ID = ThreadId.make("relay-thread");
@@ -172,6 +173,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
     readonly readShell?: (threadId: ThreadId) => Effect.Effect<OrchestrationV2ThreadShell | null>;
     readonly domainEvents?: Stream.Stream<OrchestrationV2DomainEvent>;
     readonly catchUpThreads?: ReadonlyArray<OrchestrationV2ThreadShell>;
+    readonly directApns?: DirectApnsService.DirectApnsService["Service"];
   } = {},
 ) {
   const values = new Map<string, Uint8Array>(
@@ -334,6 +336,9 @@ const makeTestRelay = Effect.fnUntraced(function* (
       getById: () => Effect.succeedSome(project),
     }),
     Effect.provideService(FetchHttpClient.Fetch, fetch),
+    options.directApns
+      ? Effect.provideService(DirectApnsService.DirectApnsService, options.directApns)
+      : Effect.map((value) => value),
     Effect.provide(NodeCrypto.layer),
   );
   return { relay, secrets, secretReads, currentShell, shellReads, publications, catchUp };
@@ -1245,5 +1250,30 @@ it.effect("catches up after startup without polling after success", () =>
     assert.equal(catchUp.activitySnapshotReads, 3);
     assert.equal(publications.length, 2);
     assert.equal(publications[1]?.state?.threadId, THREAD_ID);
+  }),
+);
+
+it.effect("publishes to DirectApnsService even when relay link secrets are absent", () =>
+  Effect.gen(function* () {
+    const directPublished: Array<RelayAgentActivityState | null> = [];
+    const { relay, publications } = yield* makeTestRelay({
+      linked: false,
+      directApns: DirectApnsService.DirectApnsService.of({
+        isConfigured: true,
+        registerDevice: () => Effect.succeed({ ok: true as const }),
+        unregisterDevice: () => Effect.succeed({ ok: true as const }),
+        registerLiveActivity: () => Effect.succeed({ ok: true as const }),
+        getSnapshot: () => Effect.succeed({ aggregate: null }),
+        publishThreadState: ({ state }) =>
+          Effect.sync(() => {
+            directPublished.push(state);
+          }),
+      }),
+    });
+    yield* relay.publishThread(THREAD_ID);
+    assert.equal(publications.length, 0);
+    assert.equal(directPublished.length, 1);
+    assert.equal(directPublished[0]?.threadId, THREAD_ID);
+    assert.equal(directPublished[0]?.phase, "running");
   }),
 );

@@ -51,6 +51,8 @@ import * as ProcessLauncher from "./process/ProcessLauncher.ts";
 import * as SpawnWorker from "./process/SpawnWorker.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import * as PullRequestHttp from "./pullRequest/http.ts";
+import * as DirectApnsService from "./push/DirectApnsService.ts";
+import * as DirectApnsHttp from "./push/directApnsHttp.ts";
 import * as SpeechModelStore from "./speech/SpeechModelStore.ts";
 import * as SpeechService from "./speech/SpeechService.ts";
 import * as CloudSpeech from "./speech/CloudSpeech.ts";
@@ -847,6 +849,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
     Layer.mergeAll(AssetSigner.layer, EnvironmentKeys.layer, WorkspacePreviewRevisions.layer),
   ),
   Layer.provideMerge(ServerSecretStore.layer),
+  Layer.provideMerge(DirectApnsService.layer),
   Layer.provideMerge(
     Layer.mergeAll(
       CloudCliTokenManager.layer.pipe(
@@ -903,6 +906,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(ServerHttp.layerApiBodyLimit),
     ),
     ServerHttp.layerOtlpTracesProxyRoute,
+    DirectApnsHttp.layer,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
     GuestHttp.layer,

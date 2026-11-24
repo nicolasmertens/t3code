@@ -53,6 +53,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as DirectApnsService from "../push/DirectApnsService.ts";
 import { forkParked } from "../serverActivation.ts";
 
 export class AgentAwarenessRelay extends Context.Service<
@@ -431,6 +432,11 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const random = yield* SecureRandom.SecureRandom;
   const signingKey = yield* EnvironmentSigningKey;
+  const directApnsOption = yield* Effect.serviceOption(DirectApnsService.DirectApnsService);
+  const directApns =
+    Option.isSome(directApnsOption) && directApnsOption.value.isConfigured
+      ? directApnsOption.value
+      : null;
   const scope = yield* Effect.scope;
   const startedAt = (yield* DateTime.now).epochMilliseconds;
   const catchUpRequests = yield* Queue.dropping<void>(1);
@@ -505,30 +511,34 @@ export const make = Effect.gen(function* () {
 
   const publishThreadUnsafe = Effect.fn("publishThreadUnsafe")(function* (threadId: ThreadId) {
     const publishAgentActivity = yield* readPublishAgentActivityEnabled;
-    if (!publishAgentActivity) {
+    const relayConfig = publishAgentActivity ? yield* readRelayConfig : null;
+    if (!relayConfig && directApns === null) {
       yield* cancelPublishRetries;
       yield* resetPublishedConnection;
-      yield* Effect.logDebug("agent activity publish skipped; publication disabled", {
-        threadId,
-      });
+      yield* Effect.logDebug(
+        publishAgentActivity
+          ? "agent activity publish skipped; relay link credentials unavailable"
+          : "agent activity publish skipped; publication disabled",
+        {
+          threadId,
+        },
+      );
       return;
     }
-    const relayConfig = yield* readRelayConfig;
-    if (!relayConfig) {
-      yield* cancelPublishRetries;
-      yield* resetPublishedConnection;
-      yield* Effect.logDebug("agent activity publish skipped; relay link credentials unavailable", {
-        threadId,
-      });
-      return;
-    }
-    if (
-      publishedRelayConfig?.url !== relayConfig.url ||
-      publishedRelayConfig.issuer !== relayConfig.issuer ||
-      publishedRelayConfig.environmentCredential !== relayConfig.environmentCredential
-    ) {
-      yield* resetPublishedConnection;
-      publishedRelayConfig = relayConfig;
+    if (relayConfig !== null) {
+      if (
+        publishedRelayConfig?.url !== relayConfig.url ||
+        publishedRelayConfig.issuer !== relayConfig.issuer ||
+        publishedRelayConfig.environmentCredential !== relayConfig.environmentCredential
+      ) {
+        if (directApns === null) {
+          yield* resetPublishedConnection;
+        }
+        publishedRelayConfig = relayConfig;
+      }
+    } else if (publishedRelayConfig !== undefined) {
+      publishedRelayConfig = undefined;
+      cachedRelayClient = undefined;
     }
     const environmentId = yield* serverEnvironment.getEnvironmentId;
 
@@ -537,6 +547,16 @@ export const make = Effect.gen(function* () {
       readonly state: RelayAgentActivityState | null;
       readonly reason: string;
     }) {
+      if (directApns !== null) {
+        yield* directApns.publishThreadState({
+          environmentId,
+          threadId,
+          state: input.state,
+        });
+      }
+      if (relayConfig === null) {
+        return;
+      }
       if (cachedRelayClient === undefined) {
         cachedRelayClient = yield* makeRelayClient(relayConfig);
       }
@@ -856,24 +876,30 @@ export const make = Effect.gen(function* () {
   });
 
   const publishActiveThreadsUnsafe = Effect.gen(function* () {
-    const relayUrl = yield* readSecretString(RELAY_URL_SECRET).pipe(
-      Effect.orElseSucceed(() => null),
-    );
-    if (!relayUrl) {
-      yield* Effect.logDebug("agent activity snapshot skipped; relay link credentials unavailable");
-      return "unlinked" as const;
-    }
-    const publishAgentActivity = yield* readPublishAgentActivityEnabled.pipe(
-      Effect.orElseSucceed(() => false),
-    );
-    if (!publishAgentActivity) {
-      yield* Effect.logDebug("agent activity snapshot skipped; publication disabled");
-      return "disabled" as const;
-    }
-    const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
-    if (!relayConfig) {
-      yield* Effect.logDebug("agent activity snapshot skipped; relay link credentials unavailable");
-      return "unlinked" as const;
+    if (directApns === null) {
+      const relayUrl = yield* readSecretString(RELAY_URL_SECRET).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      if (!relayUrl) {
+        yield* Effect.logDebug(
+          "agent activity snapshot skipped; relay link credentials unavailable",
+        );
+        return "unlinked" as const;
+      }
+      const publishAgentActivity = yield* readPublishAgentActivityEnabled.pipe(
+        Effect.orElseSucceed(() => false),
+      );
+      if (!publishAgentActivity) {
+        yield* Effect.logDebug("agent activity snapshot skipped; publication disabled");
+        return "disabled" as const;
+      }
+      const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
+      if (!relayConfig) {
+        yield* Effect.logDebug(
+          "agent activity snapshot skipped; relay link credentials unavailable",
+        );
+        return "unlinked" as const;
+      }
     }
     const environmentId = yield* serverEnvironment.getEnvironmentId;
     const projectSnapshot = yield* projects.snapshot;
@@ -955,10 +981,13 @@ export const make = Effect.gen(function* () {
         readRelayConfig.pipe(Effect.orElseSucceed(() => null)),
         readPublishAgentActivityEnabled.pipe(Effect.orElseSucceed(() => false)),
       ]);
-      const startupState = resolveAgentActivityPublishingStartupState({
-        relayConfigured: relayConfig !== null,
-        publishEnabled,
-      });
+      const startupState =
+        directApns !== null
+          ? ("enabled" as const)
+          : resolveAgentActivityPublishingStartupState({
+              relayConfigured: relayConfig !== null,
+              publishEnabled,
+            });
       switch (startupState) {
         case "waiting-for-link":
           yield* Effect.logInfo(
@@ -970,7 +999,7 @@ export const make = Effect.gen(function* () {
           break;
         case "enabled":
           yield* Effect.logInfo("agent activity publishing enabled", {
-            relayUrl: relayConfig?.url,
+            relayUrl: relayConfig?.url ?? "direct-apns",
           });
           break;
       }

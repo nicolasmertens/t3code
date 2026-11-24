@@ -10,6 +10,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -22,6 +23,7 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import { databaseMigrationHead } from "../persistence/databaseMigrationHead.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as DirectApnsService from "../push/DirectApnsService.ts";
 import { isSpeechPlatformSupported } from "../speech/platform.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
@@ -311,13 +313,20 @@ export const make = Effect.gen(function* () {
     },
   };
 
+  const directApnsOption = yield* Effect.serviceOption(DirectApnsService.DirectApnsService);
+  const directApnsConfigured =
+    Option.isSome(directApnsOption) && directApnsOption.value.isConfigured;
+
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
     // Publishing opt-in and relay links change at runtime; read the capability per request.
     getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
-      Effect.map((agentActivityPublishing) => ({
+      Effect.map((relayPublishingActive) => ({
         ...descriptor,
-        capabilities: { ...descriptor.capabilities, agentActivityPublishing },
+        capabilities: {
+          ...descriptor.capabilities,
+          agentActivityPublishing: directApnsConfigured || relayPublishingActive,
+        },
       })),
     ),
   });

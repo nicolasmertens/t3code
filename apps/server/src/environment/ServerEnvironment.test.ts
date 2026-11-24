@@ -20,6 +20,7 @@ import {
   RELAY_URL_SECRET,
 } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
+import * as DirectApnsService from "../push/DirectApnsService.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
 
 const layerServerEnvironment = (baseDir: string) =>
@@ -363,6 +364,37 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         const disabled = yield* serverEnvironment.getDescriptor;
         expect(disabled.capabilities.agentActivityPublishing).toBe(false);
       }).pipe(Effect.provide(layerTest));
+    }),
+  );
+
+  it.effect("advertises agentActivityPublishing when DirectApnsService is configured", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-direct-apns-",
+      });
+      const layerTest = ServerEnvironment.layer.pipe(
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(
+          Layer.succeed(
+            DirectApnsService.DirectApnsService,
+            DirectApnsService.DirectApnsService.of({
+              isConfigured: true,
+              registerDevice: () => Effect.succeed({ ok: true as const }),
+              unregisterDevice: () => Effect.succeed({ ok: true as const }),
+              registerLiveActivity: () => Effect.succeed({ ok: true as const }),
+              getSnapshot: () => Effect.succeed({ aggregate: null }),
+              publishThreadState: () => Effect.void,
+            }),
+          ),
+        ),
+        Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      );
+      const descriptor = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(Effect.provide(layerTest));
+      expect(descriptor.capabilities.agentActivityPublishing).toBe(true);
     }),
   );
 });
