@@ -584,7 +584,11 @@ const make = Effect.gen(function* () {
     );
 
   // The tunnel must reach this server, so the signed origin is its own loopback address, never the caller's.
-  const serverLoopbackOrigin = Effect.gen(function* () {
+  // Publish-only links ("manual") never start a tunnel, so a server bound to one private interface
+  // (for example a mesh IP) signs the loopback form of its port instead of failing the link.
+  const serverLoopbackOrigin = Effect.fn("environment.cloud.serverLoopbackOrigin")(function* (
+    providerKind: RelayLinkProofRequest["endpoint"]["providerKind"],
+  ) {
     const address = httpServer.address;
     if (typeof address === "string" || !("port" in address)) {
       return yield* new CloudLinkInternalError({ operation: "resolve-server-origin" });
@@ -593,6 +597,9 @@ const make = Effect.gen(function* () {
       `http://${loopbackUrlHostForAddress(address)}:${address.port}`,
     );
     if (!isLoopbackEndpointOrigin(origin)) {
+      if (providerKind === "manual") {
+        return { localHttpHost: "127.0.0.1", localHttpPort: origin.localHttpPort };
+      }
       return yield* new CloudLinkOriginInvalidError({ origin: "local" });
     }
     return origin;
@@ -604,7 +611,7 @@ const make = Effect.gen(function* () {
     if (!isSupportedLinkProviderKind(request)) {
       return yield* new CloudLinkOriginInvalidError({ origin: "endpoint" });
     }
-    const origin = yield* serverLoopbackOrigin;
+    const origin = yield* serverLoopbackOrigin(request.endpoint.providerKind);
     const now = yield* DateTime.now;
     const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
     // Borrow only the relay clock; the relay still verifies and consumes the challenge.

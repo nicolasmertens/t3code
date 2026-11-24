@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -330,6 +331,79 @@ describe("releaseManagedTunnelOnShutdown", () => {
           scopes: ["agent_activity_notifications"],
         });
       }).pipe(provideReleaseHarness({ store, applyConfigCalls: [], requests: [] }));
+    },
+  );
+
+  it.effect.each([
+    { providerKind: "manual" as const, accepted: true },
+    { providerKind: "cloudflare_tunnel" as const, accepted: false },
+  ])(
+    "signs a loopback origin for a server bound to a private IP only when publishing ($providerKind)",
+    ({ providerKind, accepted }) => {
+      const { store } = makeMemorySecretStore();
+
+      return Effect.gen(function* () {
+        const relayNow = 1_800_000_000;
+        const relayIssuer = "https://relay.example.test";
+        const relayKeys = yield* EnvironmentKeys.getOrCreateEnvironmentKeyPairFromSecretStore(
+          makeMemorySecretStore().store,
+        );
+        const challenge = yield* signRelayJwt({
+          privateKey: relayKeys.privateKey,
+          typ: "t3-link-challenge+jwt",
+          payload: {
+            kind: "environment_link_challenge",
+            iss: relayIssuer,
+            aud: relayIssuer,
+            sub: "user-123",
+            jti: "challenge-jti",
+            iat: relayNow,
+            exp: relayNow + 300,
+            notificationsEnabled: true,
+            liveActivitiesEnabled: true,
+            managedTunnelsEnabled: providerKind === "cloudflare_tunnel",
+          },
+        });
+        yield* TestClock.setTime(relayNow * 1_000);
+        const link = yield* CloudLink.CloudLink;
+        const result = yield* link
+          .linkProof({
+            challenge,
+            relayIssuer,
+            endpoint: {
+              httpBaseUrl: "http://100.96.0.18:3773",
+              wsBaseUrl: "ws://100.96.0.18:3773",
+              providerKind,
+            },
+            origin: { localHttpHost: "100.96.0.18", localHttpPort: 3773 },
+          })
+          .pipe(Effect.result);
+        if (!accepted) {
+          expect(Result.isFailure(result)).toBe(true);
+          return;
+        }
+        if (Result.isFailure(result)) throw new Error("Expected a signed link proof");
+        const environmentKeys =
+          yield* EnvironmentKeys.getOrCreateEnvironmentKeyPairFromSecretStore(store);
+        const verified = yield* verifyRelayJwt(RelayEnvironmentLinkProofPayload, {
+          publicKey: environmentKeys.publicKey,
+          token: result.success,
+          typ: RELAY_LINK_PROOF_TYP,
+          issuer: "t3-env:env_123",
+          audience: relayIssuer,
+        });
+        expect(verified).toMatchObject({
+          origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+          scopes: ["agent_activity_notifications"],
+        });
+      }).pipe(
+        provideReleaseHarness({
+          store,
+          applyConfigCalls: [],
+          requests: [],
+          address: NetAddress.inetAddressFromIpStringUnsafe("100.96.0.18", 3773),
+        }),
+      );
     },
   );
 
