@@ -46,6 +46,12 @@ export function createSourceControlEnvironmentAtoms<R, E>(
       label: "environment-data:source-control:repositories",
       tag: WS_METHODS.sourceControlListRepositories,
     }),
+    // A clone into a folder of an existing project; the RPC returns once the checkout is on
+    // disk and the caller tracks it. Unscheduled: a slow clone must not hold up project clones.
+    cloneRepository: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:source-control:clone-repository",
+      tag: WS_METHODS.sourceControlCloneRepository,
+    }),
     // Clone-backed project creation. The RPC returns once the project exists
     // and the clone runs in the background; `projectClones` carries progress.
     startProjectClone: createEnvironmentRpcCommand(runtime, {
