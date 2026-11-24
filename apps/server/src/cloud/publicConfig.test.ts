@@ -80,3 +80,20 @@ it("product opt-out disables relay tracing with either built-in or runtime crede
     null,
   );
 });
+
+it("always disables relay tracing even when telemetry is enabled and credentials are set", () => {
+  const fallback = {
+    tracesUrl: "https://embedded.example.test/v1/traces",
+    tracesDataset: "embedded-dataset",
+    tracesToken: "embedded-token",
+  };
+  const env = {
+    T3CODE_TELEMETRY_ENABLED: "true",
+    T3CODE_OTEL_SDK_DISABLED: "false",
+    T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://runtime.example.test/v1/traces",
+    T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "runtime-dataset",
+    T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "runtime-token",
+  };
+
+  assert.equal(resolveRelayClientTracingConfig(env, fallback), null);
+});
