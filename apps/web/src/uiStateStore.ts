@@ -18,6 +18,8 @@ const LEGACY_PERSISTED_STATE_KEYS = [
   "codething:renderer-state:v1",
 ] as const;
 
+export type SidebarQueueGroupMode = "flat" | "project" | "status";
+
 export interface PersistedUiState {
   projectExpandedById?: Record<string, boolean>;
   projectOrder?: string[];
@@ -28,6 +30,10 @@ export interface PersistedUiState {
   defaultAdvertisedEndpointKey?: string | null;
   sidebarProjectScopeKey?: string | null;
   sidebarProjectScopeKeys?: string[];
+  sidebarGroupMode?: SidebarQueueGroupMode | null;
+  sidebarUrgencyOrder?: boolean;
+  sidebarAutoCollapseDone?: boolean;
+  sidebarStatusGroupExpandedById?: Record<string, boolean>;
   pullRequestMergeMethod?: string;
 }
 
@@ -35,6 +41,10 @@ export interface UiProjectState {
   projectExpandedById: Record<string, boolean>;
   projectOrder: string[];
   sidebarProjectScopeKeys: string[];
+  sidebarGroupMode: SidebarQueueGroupMode | null;
+  sidebarUrgencyOrder: boolean;
+  sidebarAutoCollapseDone: boolean;
+  sidebarStatusGroupExpandedById: Record<string, boolean>;
 }
 
 export interface UiThreadState {
@@ -56,6 +66,10 @@ const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
   sidebarProjectScopeKeys: [],
+  sidebarGroupMode: null,
+  sidebarUrgencyOrder: true,
+  sidebarAutoCollapseDone: false,
+  sidebarStatusGroupExpandedById: {},
   threadLastVisitedAtById: {},
   defaultAdvertisedEndpointKey: null,
   pullRequestMergeMethod: "merge",
@@ -93,6 +107,10 @@ function sanitizeBooleanRecord(value: unknown): Record<string, boolean> {
 
 function sanitizeOptionalKey(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function sanitizeSidebarGroupMode(value: unknown): SidebarQueueGroupMode | null {
+  return value === "flat" || value === "project" || value === "status" ? value : null;
 }
 
 const isPullRequestMergeMethod = Schema.is(PullRequestMergeMethod);
@@ -144,6 +162,16 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     sidebarProjectScopeKeys: sanitizeStringArray(
       parsed.sidebarProjectScopeKeys ?? [parsed.sidebarProjectScopeKey],
     ),
+    sidebarGroupMode: sanitizeSidebarGroupMode(parsed.sidebarGroupMode),
+    sidebarUrgencyOrder:
+      typeof parsed.sidebarUrgencyOrder === "boolean"
+        ? parsed.sidebarUrgencyOrder
+        : initialState.sidebarUrgencyOrder,
+    sidebarAutoCollapseDone:
+      typeof parsed.sidebarAutoCollapseDone === "boolean"
+        ? parsed.sidebarAutoCollapseDone
+        : initialState.sidebarAutoCollapseDone,
+    sidebarStatusGroupExpandedById: sanitizeBooleanRecord(parsed.sidebarStatusGroupExpandedById),
     pullRequestMergeMethod: isPullRequestMergeMethod(parsed.pullRequestMergeMethod)
       ? parsed.pullRequestMergeMethod
       : initialState.pullRequestMergeMethod,
@@ -190,6 +218,10 @@ export function persistState(state: UiState): void {
           state.sidebarProjectScopeKeys.length === 1
             ? (state.sidebarProjectScopeKeys[0] ?? null)
             : null,
+        sidebarGroupMode: state.sidebarGroupMode,
+        sidebarUrgencyOrder: state.sidebarUrgencyOrder,
+        sidebarAutoCollapseDone: state.sidebarAutoCollapseDone,
+        sidebarStatusGroupExpandedById: state.sidebarStatusGroupExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
       } satisfies PersistedUiState),
     );
@@ -360,13 +392,78 @@ export function reorderProjects(
   };
 }
 
+function setSidebarGroupMode(state: UiState, mode: SidebarQueueGroupMode | null): UiState {
+  return state.sidebarGroupMode === mode ? state : { ...state, sidebarGroupMode: mode };
+}
+
+function setSidebarUrgencyOrder(state: UiState, enabled: boolean): UiState {
+  return state.sidebarUrgencyOrder === enabled ? state : { ...state, sidebarUrgencyOrder: enabled };
+}
+
+function setSidebarAutoCollapseDone(state: UiState, enabled: boolean): UiState {
+  return state.sidebarAutoCollapseDone === enabled
+    ? state
+    : { ...state, sidebarAutoCollapseDone: enabled };
+}
+
+function setStatusGroupExpanded(state: UiState, statusKey: string, expanded: boolean): UiState {
+  if (state.sidebarStatusGroupExpandedById[statusKey] === expanded) {
+    return state;
+  }
+  return {
+    ...state,
+    sidebarStatusGroupExpandedById: {
+      ...state.sidebarStatusGroupExpandedById,
+      [statusKey]: expanded,
+    },
+  };
+}
+
+function setStatusGroupsExpandedBatch(
+  state: UiState,
+  entries: ReadonlyArray<readonly [string, boolean]>,
+): UiState {
+  let changed = false;
+  const next = { ...state.sidebarStatusGroupExpandedById };
+  for (const [key, expanded] of entries) {
+    if (next[key] !== expanded) {
+      next[key] = expanded;
+      changed = true;
+    }
+  }
+  return changed ? { ...state, sidebarStatusGroupExpandedById: next } : state;
+}
+
+function setProjectsExpandedBatch(
+  state: UiState,
+  entries: ReadonlyArray<readonly [readonly string[], boolean]>,
+): UiState {
+  let changed = false;
+  const projectExpandedById = { ...state.projectExpandedById };
+  for (const [ids, expanded] of entries) {
+    for (const id of ids) {
+      if (projectExpandedById[id] !== expanded) {
+        projectExpandedById[id] = expanded;
+        changed = true;
+      }
+    }
+  }
+  return changed ? { ...state, projectExpandedById } : state;
+}
+
 interface UiStateStore extends UiState {
   markThreadVisited: (threadId: string, visitedAt: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setSidebarProjectScopeKeys: (projectKeys: readonly string[]) => void;
+  setSidebarGroupMode: (mode: SidebarQueueGroupMode | null) => void;
+  setSidebarUrgencyOrder: (enabled: boolean) => void;
+  setSidebarAutoCollapseDone: (enabled: boolean) => void;
+  setStatusGroupExpanded: (statusKey: string, expanded: boolean) => void;
+  setStatusGroupsExpandedBatch: (entries: ReadonlyArray<readonly [string, boolean]>) => void;
   setPullRequestMergeMethod: (method: PullRequestMergeMethod) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
+  setProjectsExpandedBatch: (entries: ReadonlyArray<readonly [readonly string[], boolean]>) => void;
   reorderProjects: (
     currentProjectOrder: readonly string[],
     draggedProjectIds: readonly string[],
@@ -384,9 +481,18 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
   setSidebarProjectScopeKeys: (projectKeys) =>
     set((state) => setSidebarProjectScopeKeys(state, projectKeys)),
+  setSidebarGroupMode: (mode) => set((state) => setSidebarGroupMode(state, mode)),
+  setSidebarUrgencyOrder: (enabled) => set((state) => setSidebarUrgencyOrder(state, enabled)),
+  setSidebarAutoCollapseDone: (enabled) =>
+    set((state) => setSidebarAutoCollapseDone(state, enabled)),
+  setStatusGroupExpanded: (statusKey, expanded) =>
+    set((state) => setStatusGroupExpanded(state, statusKey, expanded)),
+  setStatusGroupsExpandedBatch: (entries) =>
+    set((state) => setStatusGroupsExpandedBatch(state, entries)),
   setPullRequestMergeMethod: (method) => set((state) => setPullRequestMergeMethod(state, method)),
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),
+  setProjectsExpandedBatch: (entries) => set((state) => setProjectsExpandedBatch(state, entries)),
   reorderProjects: (currentProjectOrder, draggedProjectIds, targetProjectIds) =>
     set((state) =>
       reorderProjects(state, currentProjectOrder, draggedProjectIds, targetProjectIds),

@@ -20,6 +20,10 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectExpandedById: {},
     projectOrder: [],
     sidebarProjectScopeKeys: [],
+    sidebarGroupMode: null,
+    sidebarUrgencyOrder: true,
+    sidebarAutoCollapseDone: false,
+    sidebarStatusGroupExpandedById: {},
     threadLastVisitedAtById: {},
     defaultAdvertisedEndpointKey: null,
     pullRequestMergeMethod: "merge",
@@ -118,6 +122,10 @@ describe("parsePersistedState", () => {
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKeys: [],
+      sidebarGroupMode: null,
+      sidebarUrgencyOrder: true,
+      sidebarAutoCollapseDone: false,
+      sidebarStatusGroupExpandedById: {},
       pullRequestMergeMethod: "merge",
     });
   });
@@ -205,6 +213,10 @@ describe("uiStateStore persistence", () => {
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKeys: [],
       sidebarProjectScopeKey: null,
+      sidebarGroupMode: null,
+      sidebarUrgencyOrder: true,
+      sidebarAutoCollapseDone: false,
+      sidebarStatusGroupExpandedById: {},
       pullRequestMergeMethod: "merge",
     });
     expect(parsePersistedState(persisted)).toEqual({

@@ -1,6 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ContextMenuSource } from "@t3tools/contracts";
+import { useDroppable } from "@dnd-kit/core";
 import { ChevronDownIcon, SquarePenIcon } from "lucide-react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { memo } from "react";
@@ -13,13 +14,7 @@ import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-
-const FOLDER_DOT_CLASS_NAME = {
-  attention: "bg-warning",
-  failed: "bg-error",
-  unread: "bg-success",
-  working: "bg-info",
-} as const;
+import { computeSidebarGroupRollup, sidebarFolderDropId } from "./sidebarGrouping.logic";
 
 const FOLDER_DOT_LABEL = {
   attention: msg(", needs you", { $context: "project folder status, read after its name" }),
@@ -34,14 +29,19 @@ export function sidebarFolderRowId(projectKey: string) {
 }
 
 /**
- * A project folder in the boring sidebar. It reads like a shelf header: a trailing
- * count and chevron, with the count and a status dot only while it is closed, so a
- * closed folder still says when a hidden thread needs you.
+ * A collapsible project group header in the sidebar. Shows total count,
+ * compact status rollup pills while collapsed (so urgent items never hide),
+ * an optional Organize trigger for "No project", and accepts thread drops to
+ * move threads straight into this project.
  */
 export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHeader(props: {
   group: SidebarProjectSnapshot;
   collapsed: boolean;
+  totalCount: number;
   hiddenThreads: readonly EnvironmentThreadShell[];
+  snoozeNow: string;
+  canAcceptThreadDrop?: boolean | undefined;
+  onOrganize?: (() => void) | undefined;
   onToggle: (group: SidebarProjectSnapshot) => void;
   onNewThread: (group: SidebarProjectSnapshot) => void;
   onContextMenu: (
@@ -52,9 +52,13 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
 }) {
   const gt = useGT();
   const m = useMessages();
-  const { group, collapsed, hiddenThreads } = props;
+  const { group, collapsed, totalCount, hiddenThreads, snoozeNow } = props;
   const rowId = sidebarFolderRowId(group.projectKey);
   const localLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
+  const { setNodeRef: setDropNodeRef, isOver } = useDroppable({
+    id: sidebarFolderDropId(group.projectKey),
+    disabled: !props.canAcceptThreadDrop,
+  });
   const dot = collapsed
     ? resolveSidebarFolderDot(
         hiddenThreads.map((thread) => ({
@@ -68,9 +72,20 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
         })),
       )
     : null;
+  const rollup =
+    collapsed && hiddenThreads.length > 0
+      ? computeSidebarGroupRollup(hiddenThreads, snoozeNow, localLastVisitedAtById)
+      : null;
+  const urgentRollupCount = rollup ? rollup.attention + rollup.failed : 0;
+  const hasRollupPills =
+    rollup !== null && (urgentRollupCount > 0 || rollup.working > 0 || rollup.done > 0);
+  const showOrganize = Boolean(group.isScratch && !collapsed && totalCount > 0 && props.onOrganize);
+
   return (
     <li
+      ref={setDropNodeRef}
       data-testid="sidebar-project-folder"
+      data-project-drop-over={isOver ? "true" : undefined}
       className="group/project-folder relative mt-2 list-none first:mt-0"
     >
       <button
@@ -86,22 +101,11 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
             contextMenuSourceOf(event),
           );
         }}
-        className="flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className={cn(
+          "flex h-8 w-full cursor-pointer items-center gap-2 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left outline-none transition-colors hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          isOver && "bg-sidebar-row-hover ring-2 ring-inset ring-ring",
+        )}
       >
-        <ProjectFavicon project={group} className="size-4 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground/90">
-          {group.displayName}
-        </span>
-        {dot ? (
-          <span className={cn("size-1.5 shrink-0 rounded-full", FOLDER_DOT_CLASS_NAME[dot])}>
-            <span className="sr-only">{m(FOLDER_DOT_LABEL[dot])}</span>
-          </span>
-        ) : null}
-        {collapsed && hiddenThreads.length > 0 ? (
-          <span className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground group-hover/project-folder:invisible group-has-[[data-sidebar-action-for]:focus]/project-folder:invisible pointer-coarse:invisible">
-            {hiddenThreads.length}
-          </span>
-        ) : null}
         <ChevronDownIcon
           aria-hidden
           className={cn(
@@ -109,30 +113,123 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
             collapsed && "-rotate-90",
           )}
         />
+        <ProjectFavicon project={group} className="size-4 shrink-0" />
+        <span className="min-w-0 truncate text-sm font-medium text-sidebar-foreground/90">
+          {group.displayName}
+        </span>
+        {totalCount > 0 ? (
+          <span className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground">
+            {totalCount}
+          </span>
+        ) : null}
+        <span className="flex-1" />
+        {isOver ? (
+          <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-3xs font-medium text-primary">
+            <T>Move here</T>
+          </span>
+        ) : (
+          <span className="flex shrink-0 items-center gap-1 group-hover/project-folder:invisible group-has-[[data-sidebar-action-for]:focus]/project-folder:invisible pointer-coarse:invisible">
+            {hasRollupPills ? (
+              <>
+                {rollup.failed > 0 ? (
+                  <span
+                    data-testid="sidebar-folder-rollup-failed"
+                    className="inline-flex items-center gap-0.5 rounded-full bg-destructive/15 px-1.5 py-px text-3xs font-semibold tabular-nums text-destructive-foreground"
+                  >
+                    {rollup.failed} !
+                  </span>
+                ) : null}
+                {rollup.attention > 0 ? (
+                  <span
+                    data-testid="sidebar-folder-rollup-attention"
+                    className="inline-flex items-center gap-0.5 rounded-full bg-warning/15 px-1.5 py-px text-3xs font-semibold tabular-nums text-warning-foreground"
+                  >
+                    {rollup.attention} !
+                  </span>
+                ) : null}
+                {rollup.working > 0 ? (
+                  <span
+                    data-testid="sidebar-folder-rollup-working"
+                    className="inline-flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-px text-3xs font-semibold tabular-nums text-info-foreground"
+                  >
+                    {rollup.working}
+                  </span>
+                ) : null}
+                {rollup.done > 0 ? (
+                  <span
+                    data-testid="sidebar-folder-rollup-done"
+                    className="inline-flex items-center gap-0.5 rounded-full bg-success/15 px-1.5 py-px text-3xs font-semibold tabular-nums text-success-foreground"
+                  >
+                    {rollup.done} ✓
+                  </span>
+                ) : null}
+              </>
+            ) : null}
+            {dot ? <span className="sr-only">{m(FOLDER_DOT_LABEL[dot])}</span> : null}
+          </span>
+        )}
       </button>
-      {/* Sits over the count, which hides on hover or focus, and left of the chevron. */}
-      <span className="absolute inset-y-0 right-6 flex items-center opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                data-sidebar-action-for={rowId}
-                size="icon-xs"
-                variant="ghost-muted"
-                aria-label={gt("New thread in {project}", { project: group.displayName })}
-                onClick={() => props.onNewThread(group)}
-              />
-            }
+      {showOrganize && !isOver ? (
+        <span className="absolute inset-y-0 right-1.5 flex items-center gap-1">
+          <Button
+            data-testid="sidebar-organize-no-project"
+            data-sidebar-action-for={rowId}
+            size="xs"
+            variant="outline"
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onOrganize?.();
+            }}
           >
-            <SquarePenIcon aria-hidden />
-          </TooltipTrigger>
-          <TooltipPopup>
-            <T>
-              New thread in <Var>{group.displayName}</Var>
-            </T>
-          </TooltipPopup>
-        </Tooltip>
-      </span>
+            <T>Organize</T>
+          </Button>
+          <span className="opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    data-sidebar-action-for={rowId}
+                    size="icon-xs"
+                    variant="ghost-muted"
+                    aria-label={gt("New thread in {project}", { project: group.displayName })}
+                    onClick={() => props.onNewThread(group)}
+                  />
+                }
+              >
+                <SquarePenIcon aria-hidden />
+              </TooltipTrigger>
+              <TooltipPopup>
+                <T>
+                  New thread in <Var>{group.displayName}</Var>
+                </T>
+              </TooltipPopup>
+            </Tooltip>
+          </span>
+        </span>
+      ) : !isOver ? (
+        <span className="absolute inset-y-0 right-1.5 flex items-center opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  data-sidebar-action-for={rowId}
+                  size="icon-xs"
+                  variant="ghost-muted"
+                  aria-label={gt("New thread in {project}", { project: group.displayName })}
+                  onClick={() => props.onNewThread(group)}
+                />
+              }
+            >
+              <SquarePenIcon aria-hidden />
+            </TooltipTrigger>
+            <TooltipPopup>
+              <T>
+                New thread in <Var>{group.displayName}</Var>
+              </T>
+            </TooltipPopup>
+          </Tooltip>
+        </span>
+      ) : null}
     </li>
   );
 });

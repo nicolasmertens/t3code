@@ -49,6 +49,7 @@ import {
   CircleDotDashedIcon,
   ClockIcon,
   FolderGit2Icon,
+  FolderInputIcon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
   PinIcon,
@@ -636,6 +637,8 @@ type SidebarThreadRowProps = {
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
+  onQuickAssignProject?: ((threadRef: ScopedThreadRef) => void) | undefined;
+  showGroupRail?: boolean | undefined;
   onFileDropThreads?: ((threadRef: ScopedThreadRef, files: File[]) => void) | undefined;
 };
 
@@ -1321,6 +1324,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         className={cn(
           "list-none [content-visibility:auto] [contain-intrinsic-size:auto_--spacing(9)]",
           metaLine !== null && multiline && "[contain-intrinsic-size:auto_--spacing(13.5)]",
+          props.showGroupRail &&
+            "relative before:pointer-events-none before:absolute before:inset-y-0 before:left-3.5 before:w-px before:bg-sidebar-border/70",
           sortable?.isDragging && "relative z-20",
         )}
       >
@@ -1444,6 +1449,33 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </span>
                     )}
                   </span>
+                  {props.onQuickAssignProject ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            data-testid="sidebar-quick-assign-project"
+                            aria-label={gt("Move to project")}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              props.onQuickAssignProject?.(threadRef);
+                            }}
+                            className={cn(
+                              "pointer-events-none absolute inset-y-0 right-5 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
+                              isWoke && "group-any-hover/sidebar-row:static",
+                            )}
+                          />
+                        }
+                      >
+                        <FolderInputIcon className="size-3" />
+                      </TooltipTrigger>
+                      <TooltipPopup side="top">
+                        <T>Move to project</T>
+                      </TooltipPopup>
+                    </Tooltip>
+                  ) : null}
                   {variantAction === "unsnooze" ? (
                     !props.snoozeSupported ? null : (
                       <button
@@ -1527,6 +1559,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       className={cn(
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
         metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
+        props.showGroupRail &&
+          "relative ps-3 before:pointer-events-none before:absolute before:inset-y-0 before:left-2 before:w-px before:bg-sidebar-border/70",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1649,7 +1683,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
                     )}
                   </span>
-                  {props.settlementSupported || showSnoozeButton || hasUnsentDraft ? (
+                  {props.settlementSupported ||
+                  showSnoozeButton ||
+                  hasUnsentDraft ||
+                  props.onQuickAssignProject ? (
                     <span
                       className={cn(
                         // Mouse clicks leave Settle focused; focus-within would pin controls over
@@ -1658,6 +1695,30 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         snoozeMenuOpen && "pointer-events-auto static opacity-100",
                       )}
                     >
+                      {props.onQuickAssignProject ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                data-testid="sidebar-quick-assign-project"
+                                aria-label={gt("Move to project")}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  props.onQuickAssignProject?.(threadRef);
+                                }}
+                                className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              />
+                            }
+                          >
+                            <FolderInputIcon className="size-3.5" />
+                          </TooltipTrigger>
+                          <TooltipPopup side="top">
+                            <T>Move to project</T>
+                          </TooltipPopup>
+                        </Tooltip>
+                      ) : null}
                       {hasUnsentDraft ? (
                         <Tooltip>
                           <TooltipTrigger

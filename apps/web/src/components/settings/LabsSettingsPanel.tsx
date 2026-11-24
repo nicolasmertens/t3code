@@ -6,6 +6,7 @@ import { AgentFeedbackMode } from "@t3tools/contracts";
 import { T, useGT, useMessages } from "gt-react";
 
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
+import { useUiStateStore } from "~/uiStateStore";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -55,7 +56,11 @@ function BoringSidebarRow() {
       control={
         <Switch
           checked={settings.boringSidebarEnabled}
-          onCheckedChange={(checked) => updateSettings({ boringSidebarEnabled: Boolean(checked) })}
+          onCheckedChange={(checked) => {
+            const enabled = Boolean(checked);
+            updateSettings({ boringSidebarEnabled: enabled });
+            useUiStateStore.getState().setSidebarGroupMode(enabled ? "project" : "flat");
+          }}
           aria-label={gt("Boring sidebar (group by project)")}
         />
       }

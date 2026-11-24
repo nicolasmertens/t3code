@@ -1599,7 +1599,7 @@ export function isPointInSidebarEmptySpace(
 }
 
 const SIDEBAR_EMPTY_SPACE_EXCLUDED_SELECTOR =
-  'button, a, input, textarea, select, [role="button"], [role="textbox"], [role="option"], [role="menuitem"], [data-sidebar-row], [data-thread-item], [data-testid="sidebar-draft-row"], [data-testid="sidebar-working-header"], [data-testid="sidebar-snoozed-header"], [data-testid="sidebar-settled-header"], [data-sidebar-empty-ignore]';
+  'button, a, input, textarea, select, [role="button"], [role="textbox"], [role="option"], [role="menuitem"], [data-sidebar-row], [data-thread-item], [data-testid="sidebar-draft-row"], [data-testid="sidebar-pinned-strip"], [data-testid="sidebar-working-header"], [data-testid="sidebar-snoozed-header"], [data-testid="sidebar-settled-header"], [data-sidebar-empty-ignore]';
 
 const SIDEBAR_SHELF_HEADER_TEST_IDS = new Set([
   "sidebar-working-header",
