@@ -53,6 +53,7 @@ export function setPendingConnectionError(message: string | null): void {
 
 export interface PairingOutcome {
   readonly ok: boolean;
+  readonly environmentId?: EnvironmentId;
   /** Shown beside the pairing form; null when the failure got its own dialog. */
   readonly error: string | null;
 }
@@ -70,7 +71,7 @@ export async function pairEnvironment(
   );
   if (AsyncResult.isSuccess(result)) {
     appAtomRegistry.set(connectionPairingUrlAtom, "");
-    return { ok: true, error: null };
+    return { ok: true, environmentId: result.value, error: null };
   }
   const error = Cause.squash(result.cause);
   const message = errorDisplayMessage(error, m) ?? m(msg("Failed to pair with the environment."));
