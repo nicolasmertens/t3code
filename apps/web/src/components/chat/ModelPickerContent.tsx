@@ -75,6 +75,10 @@ import {
 } from "../../providerInstances";
 import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
 import { hasRuntimeModelCatalog } from "../../providerModels";
+import {
+  MODEL_PICKER_MAX_HEIGHT_UNITS,
+  modelPickerContentHeightUnits,
+} from "./ProviderModelPicker.logic";
 
 type ModelPickerItem = {
   slug: string;
@@ -174,10 +178,6 @@ function adjacentModelPickerProvider(input: {
 
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
 const MODEL_LIST_ESTIMATED_ITEM_SIZE = 32;
-// Rendered heights in `--spacing` units. Chrome is the search box and list padding, plus a 1px border.
-const ROW_UNITS = 8;
-const ROW_SEPARATOR_UNITS = 0.5;
-const LIST_CHROME_UNITS = 15.5;
 
 function ModelListSeparator() {
   return <div className="h-0.5" />;
@@ -642,14 +642,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const isLocked = lockedProvider !== null;
   const isSearching = searchQuery.trim().length > 0;
   // Fit the tallest tab so switching tabs never resizes the popup and moves the rail under the cursor.
-  const tallestTabUnits = (() => {
-    const unitsByTab = new Map<ProviderInstanceId | "favorites", number>();
+  const tallestTabRows = (() => {
+    const rowsByTab = new Map<ProviderInstanceId | "favorites", number>();
     const addRow = (tab: ProviderInstanceId | "favorites") => {
-      const previous = unitsByTab.get(tab);
-      unitsByTab.set(
-        tab,
-        previous === undefined ? ROW_UNITS : previous + ROW_SEPARATOR_UNITS + ROW_UNITS,
-      );
+      rowsByTab.set(tab, (rowsByTab.get(tab) ?? 0) + 1);
     };
     const tabsWithLegacyRow = new Set<ProviderInstanceId>();
     for (const model of flatModels) {
@@ -666,7 +662,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     for (const [instanceId, subProviders] of subProvidersByInstance) {
       for (const _subProvider of subProviders) addRow(instanceId);
     }
-    return Math.max(0, ...unitsByTab.values());
+    return Math.max(0, ...rowsByTab.values());
   })();
   const lockedDisabledInstanceIds = (() => {
     if (!isLocked) {
@@ -960,8 +956,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       <div
         ref={pickerContentRef}
         className={cn(
-          "relative flex w-screen max-w-90 flex-row overflow-hidden",
-          props.docked ? "max-sm:h-56 max-sm:w-full max-sm:max-w-none" : "max-h-86.5",
+          "relative flex min-w-0 w-screen max-w-100 flex-row overflow-hidden",
+          props.docked
+            ? "max-sm:h-56 max-sm:w-full max-sm:max-w-none"
+            : "max-h-[min(calc(var(--spacing)*120),var(--available-height,100dvh))]",
         )}
         // Docked, the popup sets the height; a minimum here would overflow short windows.
         style={
@@ -970,7 +968,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             : isSearching
               ? { height: searchHeight }
               : {
-                  minHeight: `min(calc(var(--spacing) * ${tallestTabUnits + LIST_CHROME_UNITS} + 1px), calc(var(--spacing) * 86.5))`,
+                  minHeight: `min(calc(var(--spacing) * ${modelPickerContentHeightUnits(tallestTabRows)} + 1px), calc(var(--spacing) * ${MODEL_PICKER_MAX_HEIGHT_UNITS}), var(--available-height, 100dvh))`,
                 }
         }
         data-model-picker-content="true"

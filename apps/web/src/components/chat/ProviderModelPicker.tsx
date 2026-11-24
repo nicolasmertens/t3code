@@ -472,9 +472,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         {props.effortColumn ? (
           <DockedPickerContext value={{ modelLabel: triggerTitle }}>
             <div className="flex max-h-(--available-height) flex-col">
-              {/* One fixed height, so a model with more options never resizes the popup. Short
-                  windows shrink it and keep the footer. */}
-              <div className="flex h-86.5 min-h-0 max-sm:h-auto max-sm:flex-col">
+              {/* One fixed height (matching MODEL_PICKER_MAX_HEIGHT_UNITS so all 9 jump-shortcut
+                  rows fit without clipping), so a model with more options never resizes the popup.
+                  Short windows shrink it and keep the footer. */}
+              <div className="flex h-120 min-h-0 max-sm:h-auto max-sm:flex-col">
                 {picker}
                 <div
                   data-model-picker-effort
