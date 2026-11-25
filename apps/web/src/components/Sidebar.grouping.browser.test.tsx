@@ -10,13 +10,14 @@ import {
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
-import { act, render } from "../../test/render";
+import { render } from "../../test/render";
 import { makeThreadFixture } from "../test-fixtures";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { __setClientSettingsForTests, getClientSettings } from "../hooks/useSettings";
+import { readMoveThreadProjectTargets } from "../hooks/useThreadActions";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { useProjects, useQuietThreadShells, useServerConfigs } from "../state/entities";
 import { useConnectedEnvironmentIds, usePrimaryEnvironmentId } from "../state/environments";
@@ -31,6 +32,7 @@ vi.mock("../state/entities", { spy: true });
 vi.mock("../state/environments", { spy: true });
 vi.mock("../hooks/useHandleNewThread", { spy: true });
 vi.mock("../hooks/useNowMinute", { spy: true });
+vi.mock("../hooks/useThreadActions", { spy: true });
 vi.mock("../hooks/useThreadRouteTarget", { spy: true });
 vi.mock("../state/session", { spy: true });
 vi.mock("../state/use-atom-command", { spy: true });
@@ -84,6 +86,19 @@ function setupSidebarMocks(
   });
 
   const moveMock = vi.fn(async () => AsyncResult.success(undefined));
+  const prevMoveTargets = vi.mocked(readMoveThreadProjectTargets).getMockImplementation();
+  stack.defer(() => {
+    if (prevMoveTargets) {
+      vi.mocked(readMoveThreadProjectTargets).mockImplementation(prevMoveTargets);
+    } else {
+      vi.mocked(readMoveThreadProjectTargets).mockReset();
+    }
+  });
+  vi.mocked(readMoveThreadProjectTargets).mockReturnValue(
+    projects
+      .filter((project) => !project.isScratch)
+      .map((project) => ({ id: project.id, name: project.title })),
+  );
   vi.mocked(useNowMinute).mockReturnValue("2026-03-10T12:00");
   vi.mocked(usePrimaryEnvironmentId).mockReturnValue(ENV);
   vi.mocked(useConnectedEnvironmentIds).mockReturnValue([ENV]);
@@ -138,6 +153,15 @@ describe("sidebar queue grouping and triage", () => {
       assistantMessageId: null,
     };
 
+    const completedRuntime = {
+      status: "completed" as const,
+      activeRunId: null,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerName: "Codex",
+      lastError: null,
+      updatedAt: "2026-03-10T10:05:00.000Z",
+    };
+
     const pinnedThread = makeThreadFixture({
       environmentId: ENV,
       id: ThreadId.make("t-pinned"),
@@ -145,6 +169,7 @@ describe("sidebar queue grouping and triage", () => {
       title: "Pinned HeyGen Ads",
       pinnedAt: "2026-03-10T09:00:00.000Z",
       latestRun: latestCompletedRun,
+      runtime: completedRuntime,
       lastVisitedAt: "2026-03-10T10:06:00.000Z",
     });
     const limitedThread = makeThreadFixture({
@@ -170,6 +195,7 @@ describe("sidebar queue grouping and triage", () => {
       projectId: godwit.id,
       title: "JMAP Integration Audit",
       latestRun: latestCompletedRun,
+      runtime: completedRuntime,
       lastVisitedAt: "2026-03-10T10:04:00.000Z",
     });
     const scratchThread = makeThreadFixture({
@@ -178,6 +204,7 @@ describe("sidebar queue grouping and triage", () => {
       projectId: scratch.id,
       title: "MRTNS books audit",
       latestRun: latestCompletedRun,
+      runtime: completedRuntime,
       lastVisitedAt: "2026-03-10T10:06:00.000Z",
     });
 
@@ -237,7 +264,7 @@ describe("sidebar queue grouping and triage", () => {
 
     // Switch to By status via header group mode menu.
     await userEvent.click(screen.getByTestId("sidebar-group-mode-trigger"));
-    await userEvent.click(screen.getByRole("menuitemradio", { name: /By status/ }));
+    await userEvent.click(page.getByRole("menuitemradio", { name: /By status/ }));
 
     await expect.element(screen.getByTestId("sidebar-status-group-attention")).toBeVisible();
     await expect.element(screen.getByTestId("sidebar-status-group-active")).toBeVisible();
@@ -246,10 +273,11 @@ describe("sidebar queue grouping and triage", () => {
     // Toggle back to Flat via g p chord.
     await userEvent.keyboard("g");
     await userEvent.keyboard("p");
-    await act(() => {});
-    expect(
-      screen.container.querySelector('[data-testid="sidebar-status-group-attention"]'),
-    ).toBeNull();
+    await vi.waitFor(() =>
+      expect(
+        screen.container.querySelector('[data-testid="sidebar-status-group-attention"]'),
+      ).toBeNull(),
+    );
   });
 
   it("opens quick-assign via m shortcut and Organize popover for No project threads", async () => {
@@ -284,13 +312,14 @@ describe("sidebar queue grouping and triage", () => {
     // Click Organize on No project header to open the organize dialog.
     await expect.element(screen.getByTestId("sidebar-organize-no-project")).toBeVisible();
     await userEvent.click(screen.getByTestId("sidebar-organize-no-project"));
-    await expect.element(screen.getByText("Organize No project threads")).toBeVisible();
+    await expect.element(page.getByText("Organize No project threads")).toBeVisible();
     await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByText("Organize No project threads")).not.toBeInTheDocument();
 
     // Press "m" to open the quick Move thread to project dialog and pick Humble Tools.
     await userEvent.keyboard("m");
-    await expect.element(screen.getByText("Move thread to project")).toBeVisible();
-    await userEvent.click(screen.getByTestId(`sidebar-move-target-${humble.id}`));
+    await expect.element(page.getByText("Move thread to project")).toBeVisible();
+    await userEvent.click(page.getByTestId(`sidebar-move-target-${humble.id}`));
 
     await vi.waitFor(() =>
       expect(moveMock).toHaveBeenCalledWith({
@@ -327,12 +356,22 @@ describe("sidebar queue grouping and triage", () => {
       assistantMessageId: null,
     };
 
+    const completedRuntime = {
+      status: "completed" as const,
+      activeRunId: null,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerName: "Codex",
+      lastError: null,
+      updatedAt: "2026-03-10T10:05:00.000Z",
+    };
+
     const activeThread = makeThreadFixture({
       environmentId: ENV,
       id: ThreadId.make("t-active"),
       projectId: fleet.id,
       title: "Idle Fleet Thread",
       latestRun: latestCompletedRun,
+      runtime: completedRuntime,
       lastVisitedAt: "2026-03-10T10:06:00.000Z",
     });
     const workingFleet = makeThreadFixture({
@@ -369,7 +408,7 @@ describe("sidebar queue grouping and triage", () => {
       projectId: godwit.id,
       title: "Snoozed GodWit Task",
       snoozedAt: "2026-03-10T11:00:00.000Z",
-      snoozedUntil: "2026-03-10T15:00:00.000Z",
+      snoozedUntil: "2099-03-10T15:00:00.000Z",
     });
     const settledFleet = makeThreadFixture({
       environmentId: ENV,
@@ -379,6 +418,7 @@ describe("sidebar queue grouping and triage", () => {
       settledOverride: "settled",
       settledAt: "2026-03-10T10:30:00.000Z",
       latestRun: latestCompletedRun,
+      runtime: completedRuntime,
       lastVisitedAt: "2026-03-10T10:04:00.000Z",
     });
 
@@ -432,13 +472,17 @@ describe("sidebar queue grouping and triage", () => {
     ).find((btn) => btn.textContent?.includes("Fleet Architecture"));
     expect(workingFleetFolderBtn).toBeDefined();
     await userEvent.click(workingFleetFolderBtn!);
-    expect(screen.container.textContent).not.toContain("Working Fleet Task");
+    await vi.waitFor(() =>
+      expect(screen.container.textContent).not.toContain("Working Fleet Task"),
+    );
     await expect.element(screen.getByText("Idle Fleet Thread")).toBeVisible();
 
     // Toggling Working section off in the group menu moves working tasks back into top project folders.
     await userEvent.click(screen.getByTestId("sidebar-group-mode-trigger"));
-    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /Working section/ }));
+    await userEvent.click(page.getByRole("menuitemcheckbox", { name: /Working section/ }));
     await expect.element(screen.getByText("Working Fleet Task")).toBeVisible();
-    expect(screen.container.querySelector('[data-testid="sidebar-working-header"]')).toBeNull();
+    await vi.waitFor(() =>
+      expect(screen.container.querySelector('[data-testid="sidebar-working-header"]')).toBeNull(),
+    );
   });
 });
