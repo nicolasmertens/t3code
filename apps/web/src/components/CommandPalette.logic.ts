@@ -578,6 +578,8 @@ export function filterCommandPaletteGroups(
     activeGroups: ReadonlyArray<CommandPaletteGroup>;
     query: string;
     isInSubmenu: boolean;
+    /** Keep the submenu scoped instead of falling back to global root search when empty. */
+    disableGlobalFallback?: boolean;
     /** Submenu options join the root search, and a submenu with no match falls back to it. */
     allOptions?: {
       readonly rootGroups: ReadonlyArray<CommandPaletteGroup>;
@@ -595,7 +597,9 @@ export function filterCommandPaletteGroups(
   if (input.allOptions && input.isInSubmenu) {
     const { allOptions, ...submenuInput } = input;
     const scoped = filterCommandPaletteGroups(submenuInput, resolve);
-    if (scoped.length > 0 || input.query.trim().length === 0) return scoped;
+    if (scoped.length > 0 || input.query.trim().length === 0 || input.disableGlobalFallback) {
+      return scoped;
+    }
     return filterCommandPaletteGroups(
       {
         ...input,

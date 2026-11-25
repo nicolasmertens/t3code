@@ -1945,6 +1945,11 @@ function OpenCommandPaletteDialog(props: {
                 ? changeAppearanceItem.groups
                 : (currentView?.groups ?? rootGroups);
 
+  const isAddProjectSubmenu =
+    currentView !== null &&
+    (activeGroups[0]?.value === ADD_PROJECT_ENTRY_GROUP ||
+      activeGroups[0]?.value === "environments" ||
+      (activeGroups[0]?.value.startsWith("sources:") ?? false));
   const isLinkedThreadSearch =
     linkedThreadSearch?.linkedThreads !== undefined && deferredQuery === linkedThreadSearch.query;
   const searchedGroups = filterCommandPaletteGroups(
@@ -1952,6 +1957,7 @@ function OpenCommandPaletteDialog(props: {
       activeGroups,
       query: deferredQuery,
       isInSubmenu: currentView !== null,
+      disableGlobalFallback: isAddProjectSubmenu,
       ...(deferredQuery.trim().length > 0
         ? {
             allOptions: {
