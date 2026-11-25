@@ -270,6 +270,11 @@ describe("sidebar queue grouping and triage", () => {
     await expect.element(screen.getByTestId("sidebar-status-group-active")).toBeVisible();
     await expect.element(screen.getByTestId("sidebar-status-group-done")).toBeVisible();
 
+    await userEvent.keyboard("{Escape}");
+    await expect
+      .element(page.getByRole("menuitemradio", { name: /By status/ }))
+      .not.toBeInTheDocument();
+
     // Toggle back to Flat via g p chord.
     await userEvent.keyboard("g");
     await userEvent.keyboard("p");
