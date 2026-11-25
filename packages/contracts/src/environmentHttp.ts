@@ -83,6 +83,12 @@ import {
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
+  FleetPanelActionInput,
+  FleetPanelActionResult,
+  FleetPanelContextInput,
+  FleetPanelContextResult,
+} from "./fleetPanel.ts";
+import {
   PullRequestDiffInput,
   PullRequestDiffResult,
   PullRequestOperationError,
@@ -1100,6 +1106,24 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint))
   .annotate(HttpApi.RedactedNames, { params: ["token"] }) {}
 
+class EnvironmentFleetPanelHttpApi extends HttpApiGroup.make("fleetPanel")
+  .add(
+    HttpApiEndpoint.post("context", "/api/fleet-panel/context", {
+      headers: OptionalBearerHeaders,
+      payload: FleetPanelContextInput,
+      success: FleetPanelContextResult,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("action", "/api/fleet-panel/action", {
+      headers: OptionalBearerHeaders,
+      payload: FleetPanelActionInput,
+      success: FleetPanelActionResult,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
@@ -1110,4 +1134,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentVoiceHttpApi)
   .add(EnvironmentConnectHttpApi)
   .add(EnvironmentWebhooksHttpApi)
-  .add(EnvironmentPeerLinkHttpApi) {}
+  .add(EnvironmentPeerLinkHttpApi)
+  .add(EnvironmentFleetPanelHttpApi) {}

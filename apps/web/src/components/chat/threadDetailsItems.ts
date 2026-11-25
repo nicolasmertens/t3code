@@ -25,6 +25,13 @@ export const THREAD_DETAILS_ITEMS = [
     defaultVisible: true,
   },
   { id: "sideChats", label: msg("Side chats"), defaultVisible: true },
+  { id: "fleetPulse", label: msg("Fleet pulse"), defaultVisible: true },
+  { id: "planAnchor", label: msg("Plan anchor"), defaultVisible: true },
+  { id: "mailBridge", label: msg("Postroom & Godwit"), defaultVisible: true },
+  { id: "librarian", label: msg("Librarian & wiki"), defaultVisible: true },
+  { id: "openbots", label: msg("OpenBot roster"), defaultVisible: true },
+  { id: "browneEngine", label: msg("Browne engine"), defaultVisible: true },
+  { id: "rvbTray", label: msg("RvB action tray"), defaultVisible: true },
   { id: "usage", label: msg("Usage limits"), defaultVisible: false },
   { id: "context", label: msg("Context window"), defaultVisible: false },
 ] as const;

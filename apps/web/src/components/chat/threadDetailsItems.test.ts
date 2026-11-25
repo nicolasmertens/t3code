@@ -23,6 +23,13 @@ describe("thread details items", () => {
     expect(visibility.usage).toBe(row.usage);
     expect(visibility.context).toBe(row.context);
     expect(visibility.servers).toBe(true);
+    expect(visibility.fleetPulse).toBe(true);
+    expect(visibility.planAnchor).toBe(true);
+    expect(visibility.mailBridge).toBe(true);
+    expect(visibility.librarian).toBe(true);
+    expect(visibility.openbots).toBe(true);
+    expect(visibility.browneEngine).toBe(true);
+    expect(visibility.rvbTray).toBe(true);
   });
 
   it("stores only choices that differ from the default", () => {

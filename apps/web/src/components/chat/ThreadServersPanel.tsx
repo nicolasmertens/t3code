@@ -48,6 +48,19 @@ import { THREAD_DETAILS_PANEL_ICON_CLASS } from "./threadDetailsPanelStyles";
 
 const SERVER_PAGE_COUNT = 4;
 
+const INTERNAL_AGENT_SERVER_RE = /(?:^|[\s/._-])(agy|antigravity|t3|acp-mcp-bridge)(?:\b|$)/iu;
+
+/** Hides internal agent helper ports (e.g. `agy`, `antigravity`, `t3`) unless launched from a user terminal. */
+export function isInternalAgentServer(
+  server: Pick<DiscoveredLocalServer, "terminal" | "processName">,
+): boolean {
+  return (
+    server.terminal === null &&
+    server.processName !== null &&
+    INTERNAL_AGENT_SERVER_RE.test(server.processName)
+  );
+}
+
 const serverKey = (server: DiscoveredLocalServer) => `${server.pid}:${server.port}`;
 
 interface ThreadServersPanelProps {
@@ -62,7 +75,9 @@ export function ThreadServersPanel(props: ThreadServersPanelProps) {
 
 function ThreadServersList(props: ThreadServersPanelProps) {
   const gt = useGT();
-  const servers = useThreadDiscoveredPorts(props);
+  const servers = useThreadDiscoveredPorts(props).filter(
+    (server) => !isInternalAgentServer(server),
+  );
   const canOpen = useEnvironmentScope(props.environmentId, AuthPreviewOperateScope);
   const canStop = useAtomValue(
     previewEnvironment.stopLocalServer.permissionAtom(props.environmentId),

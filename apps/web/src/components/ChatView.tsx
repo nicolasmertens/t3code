@@ -4098,6 +4098,7 @@ export default function ChatView(props: ChatViewProps) {
                   {...(draftId ? { draftId } : {})}
                   composerDraftTarget={composerDraftTarget}
                   activeProjectName={activeProject?.title}
+                  threadTitle={activeThread.title}
                   activeProjectScripts={activeProject ? activeProjectScripts : undefined}
                   preferredScriptId={
                     activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null

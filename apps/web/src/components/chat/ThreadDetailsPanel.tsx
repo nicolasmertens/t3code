@@ -25,6 +25,7 @@ import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
+import { ThreadFleetPanels } from "./fleet/ThreadFleetPanels";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadRepositorySections } from "./ThreadRepositorySections";
 import { ThreadServersPanel } from "./ThreadServersPanel";
@@ -62,6 +63,7 @@ interface ThreadDetailsPanelProps extends Pick<
   draftId?: DraftId;
   composerDraftTarget: ComposerThreadTarget;
   activeProjectName: string | undefined;
+  threadTitle?: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
@@ -99,8 +101,10 @@ interface ThreadDetailsPanelProps extends Pick<
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
+  const rawDetailsItems = useClientSettings((settings) => settings.threadDetailsItems);
   const gt = useGT();
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const [showDevTools, setShowDevTools] = useState(false);
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,
     props.activeProjectScripts && visible.scripts ? props.gitCwd : null,
@@ -183,10 +187,22 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       }}
     >
       {(density) => {
+        const isNonCodeFolder = !folderIsRepo && !tracksFolders;
+        const offersNonCodeDevTools =
+          isNonCodeFolder &&
+          !showDevTools &&
+          density === "full" &&
+          (props.showOpenInPicker ||
+            (offersGit && props.activeProjectName !== undefined && taskFolder === null));
+
         // Section flags follow the rows that will render, so no empty section steals the divider rule.
         const show = {
           environment: density === "full" && visible.environment,
-          openIn: density !== "essential" && visible.openIn && props.showOpenInPicker,
+          openIn:
+            density !== "essential" &&
+            visible.openIn &&
+            props.showOpenInPicker &&
+            (!isNonCodeFolder || rawDetailsItems.openIn === true || showDevTools),
           scripts: visible.scripts && props.activeProjectScripts !== undefined,
           branch: offersGit && folderIsRepo && visible.branch,
           // Without a branch selector, linked pull requests still need somewhere to show.
@@ -195,7 +211,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           git:
             offersGit &&
             props.activeProjectName !== undefined &&
-            (folderIsRepo || (!tracksFolders && taskFolder === null)) &&
+            (folderIsRepo ||
+              (!tracksFolders &&
+                taskFolder === null &&
+                (rawDetailsItems.gitActions === true || showDevTools))) &&
             (visible.gitActions || (visible.changes && folderIsRepo)),
           // Also for a project that tracks nothing: a thread can change a submodule.
           repositories: offersGit && density !== "essential" && visible.gitActions,
@@ -330,6 +349,40 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
               {visible.context && props.usage.contextWindow ? (
                 <ThreadDetailsContext usage={props.usage.contextWindow} />
+              ) : null}
+
+              {density === "full" ? (
+                <ThreadFleetPanels
+                  environmentId={props.environmentId}
+                  threadId={props.threadId}
+                  projectId={props.projectId}
+                  projectName={props.activeProjectName}
+                  threadTitle={props.threadTitle}
+                  gitCwd={props.gitCwd}
+                  composerDraftTarget={props.composerDraftTarget}
+                  visible={visible}
+                  onComposerFocusRequest={props.onComposerFocusRequest}
+                />
+              ) : null}
+
+              {offersNonCodeDevTools ? (
+                <div className="px-2 pb-1">
+                  <ThreadDetailsControl
+                    size="xs"
+                    variant="ghost"
+                    part="row"
+                    panel
+                    onClick={() => setShowDevTools(true)}
+                  >
+                    <SlidersHorizontalIcon
+                      className={THREAD_DETAILS_PANEL_ICON_CLASS}
+                      aria-hidden
+                    />
+                    <span className={cn("ml-0.5", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
+                      <T>Show dev tools</T>
+                    </span>
+                  </ThreadDetailsControl>
+                </div>
               ) : null}
 
               {/* Shown only when no section above has content, so an emptied card can be refilled. */}

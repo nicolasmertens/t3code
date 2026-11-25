@@ -227,7 +227,7 @@ it("offers only machines where no worktree can come from and several machines ex
   await expect.element(page.getByText("New worktree")).not.toBeInTheDocument();
 });
 
-it("shows a linked pull request in a folder that is not a git repository", async () => {
+it("shows a linked pull request and hides dev noise by default in a non-code folder", async () => {
   using fixture = setup({
     workspaceRoot: "/work/plain",
     folder: "/work/plain",
@@ -236,6 +236,10 @@ it("shows a linked pull request in a folder that is not a git repository", async
   await using _screen = await render(<Panel fixture={fixture} />);
   await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
   await expect.element(page.getByText("#27513")).toBeVisible();
+  await expect
+    .element(page.getByRole("button", { name: "Initialize Git" }))
+    .not.toBeInTheDocument();
+  await page.getByRole("button", { name: "Show dev tools" }).click();
   await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
 });
 

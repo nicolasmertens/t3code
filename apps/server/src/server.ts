@@ -50,6 +50,8 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProcessLauncher from "./process/ProcessLauncher.ts";
 import * as SpawnWorker from "./process/SpawnWorker.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
+import * as FleetPanelHttp from "./fleet/FleetPanelHttp.ts";
+import * as FleetPanelService from "./fleet/FleetPanelService.ts";
 import * as PullRequestHttp from "./pullRequest/http.ts";
 import * as DirectApnsService from "./push/DirectApnsService.ts";
 import * as DirectApnsHttp from "./push/directApnsHttp.ts";
@@ -899,6 +901,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
+      Layer.provide(FleetPanelHttp.layer.pipe(Layer.provide(FleetPanelService.layer))),
       Layer.provide(speechHttpApiLayer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
