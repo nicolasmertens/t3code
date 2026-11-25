@@ -407,14 +407,14 @@ function Sidebar({
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
-              : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
+              : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=right]:border-l",
             className,
           )}
           data-slot="sidebar-container"
           {...props}
         >
           <div
-            className="flex h-full w-full flex-col bg-sidebar surface-grain group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5"
+            className="relative flex h-full w-full flex-col bg-sidebar surface-grain group-data-[variant=sidebar]:group-data-[side=left]:before:pointer-events-none group-data-[variant=sidebar]:group-data-[side=left]:before:absolute group-data-[variant=sidebar]:group-data-[side=left]:before:inset-y-0 group-data-[variant=sidebar]:group-data-[side=left]:before:right-0 group-data-[variant=sidebar]:group-data-[side=left]:before:w-px group-data-[variant=sidebar]:group-data-[side=left]:before:bg-sidebar-border group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5"
             data-sidebar="sidebar"
             data-slot="sidebar-inner"
           >

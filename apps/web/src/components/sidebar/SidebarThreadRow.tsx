@@ -1013,20 +1013,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     }
   };
 
+  const isAttachedActive = props.isActive && !props.sortable?.isDragging;
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" &&
       !props.isActive &&
       "[&:not(:hover):not(:focus-within)_*:not(.live-activity-focus_*)]:text-secondary-label",
-    props.isActive
-      ? "bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
-      : isSelected || props.sweepAction !== null
-        ? "bg-sidebar-row-selected text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
-        : hasUnsentDraft
-          ? cn(draftSurfaceClassName, "text-sidebar-foreground")
-          : shouldRecede
-            ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-            : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+    isAttachedActive
+      ? "z-10 bg-background text-sidebar-foreground border border-sidebar-border/70 md:rounded-r-none md:border-r-0"
+      : props.isActive
+        ? "bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
+        : isSelected || props.sweepAction !== null
+          ? "bg-sidebar-row-selected text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
+          : hasUnsentDraft
+            ? cn(draftSurfaceClassName, "text-sidebar-foreground")
+            : shouldRecede
+              ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+              : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
     shouldRecede &&
       (status === "preparing" || status === "working") &&
       "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
@@ -1329,7 +1332,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           sortable?.isDragging && "relative z-20",
         )}
       >
-        <Tooltip disabled={isRenaming || sortable?.isDragging}>
+        <Tooltip disabled={isRenaming || snoozeMenuOpen || sortable?.isDragging}>
           <TooltipTrigger
             render={
               <div
@@ -1348,7 +1351,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     ? "flex flex-col justify-center px-2.5 py-1.5"
                     : "flex h-9 items-center gap-2.5 px-2.5",
                   // Lines titles up with the folder name, past its chevron and icon.
-                  inFolder && "ps-9",
+                  inFolder &&
+                    (isAttachedActive && props.showGroupRail
+                      ? "ps-9 md:ms-5 md:w-[calc(100%-1.25rem+var(--sidebar-content-inset))] md:ps-4 md:pe-4.5"
+                      : isAttachedActive
+                        ? "ps-9 md:w-[calc(100%+var(--sidebar-content-inset))] md:pe-4.5"
+                        : "ps-9"),
+                  !inFolder &&
+                    isAttachedActive &&
+                    "md:w-[calc(100%+var(--sidebar-content-inset))] md:pe-4.5",
                 )}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
@@ -1388,7 +1399,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               ) : (
                 <span
                   className={cn(
-                    "relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
+                    "group/sidebar-status-slot relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
                     props.sweepAction !== null && "hidden",
                     jumpHintLabel && JUMP_HINT_SLOT_CLASS_NAME,
                   )}
@@ -1396,7 +1407,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   <span
                     className={cn(
                       "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
-                      !isWoke && "group-any-hover/sidebar-row:opacity-0",
+                      !isWoke &&
+                        "group-has-[:focus-visible]/sidebar-status-slot:pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:pointer-events-none group-any-hover/sidebar-row:absolute group-any-hover/sidebar-row:right-0 group-any-hover/sidebar-row:opacity-0",
+                      snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
                     )}
                   >
                     {variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
@@ -1449,93 +1462,102 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </span>
                     )}
                   </span>
-                  {props.onQuickAssignProject ? (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
+                  {props.onQuickAssignProject ||
+                  (showSnoozeButton && variantAction === "settle") ||
+                  (variantAction === "unsnooze" && props.snoozeSupported) ||
+                  (variantAction !== "unsnooze" && props.settlementSupported) ? (
+                    <span
+                      className={cn(
+                        "pointer-events-none absolute inset-y-0 right-0 -mr-1.5 flex items-center opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100",
+                        snoozeMenuOpen && "pointer-events-auto static opacity-100",
+                      )}
+                    >
+                      {props.onQuickAssignProject ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                data-testid="sidebar-quick-assign-project"
+                                aria-label={gt("Move to project")}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  props.onQuickAssignProject?.(threadRef);
+                                }}
+                                className="inline-flex h-full cursor-pointer items-center rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              />
+                            }
+                          >
+                            <FolderInputIcon className="size-3" />
+                          </TooltipTrigger>
+                          <TooltipPopup side="top">
+                            <T>Move to project</T>
+                          </TooltipPopup>
+                        </Tooltip>
+                      ) : null}
+                      {showSnoozeButton && variantAction === "settle" ? (
+                        <SnoozeMenuButton
+                          open={snoozeMenuOpen}
+                          onOpenChange={setSnoozeMenuOpen}
+                          onSnooze={handleSnoozePreset}
+                          timestampFormat={props.timestampFormat}
+                          environmentId={thread.environmentId}
+                        />
+                      ) : null}
+                      {variantAction === "unsnooze" ? (
+                        !props.snoozeSupported ? null : (
                           <button
                             type="button"
-                            data-testid="sidebar-quick-assign-project"
-                            aria-label={gt("Move to project")}
-                            onPointerDown={(event) => event.stopPropagation()}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              props.onQuickAssignProject?.(threadRef);
-                            }}
-                            className={cn(
-                              "pointer-events-none absolute inset-y-0 right-5 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                              isWoke && "group-any-hover/sidebar-row:static",
-                            )}
-                          />
-                        }
-                      >
-                        <FolderInputIcon className="size-3" />
-                      </TooltipTrigger>
-                      <TooltipPopup side="top">
-                        <T>Move to project</T>
-                      </TooltipPopup>
-                    </Tooltip>
+                            aria-label={gt("Wake thread now")}
+                            onClick={handleUnsnoozeClick}
+                            onPointerDown={handleActionPointerDown}
+                            className="inline-flex h-full cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            <AlarmClockOffIcon className="mb-px size-3" />
+                          </button>
+                        )
+                      ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                aria-label={gt("Un-settle thread")}
+                                onClick={handleUnsettleClick}
+                                onPointerDown={handleActionPointerDown}
+                                className="inline-flex h-full cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              />
+                            }
+                          >
+                            <Undo2Icon className="mb-px size-3.5" />
+                          </TooltipTrigger>
+                          <TooltipPopup side="top">
+                            <T>Un-settle thread</T>
+                          </TooltipPopup>
+                        </Tooltip>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                aria-label={gt("Settle thread")}
+                                onClick={handleSettleClick}
+                                onPointerDown={handleActionPointerDown}
+                                className="inline-flex h-full cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              />
+                            }
+                          >
+                            <CheckIcon className="size-3" />
+                          </TooltipTrigger>
+                          <TooltipPopup side="top">
+                            <T>Settle thread</T>
+                          </TooltipPopup>
+                        </Tooltip>
+                      )}
+                    </span>
                   ) : null}
-                  {variantAction === "unsnooze" ? (
-                    !props.snoozeSupported ? null : (
-                      <button
-                        type="button"
-                        aria-label={gt("Wake thread now")}
-                        onClick={handleUnsnoozeClick}
-                        onPointerDown={handleActionPointerDown}
-                        className={cn(
-                          "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                          isWoke && "group-any-hover/sidebar-row:static",
-                        )}
-                      >
-                        <AlarmClockOffIcon className="mb-px size-3" />
-                      </button>
-                    )
-                  ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <button
-                            type="button"
-                            aria-label={gt("Un-settle thread")}
-                            onClick={handleUnsettleClick}
-                            onPointerDown={handleActionPointerDown}
-                            className={cn(
-                              "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                              isWoke && "group-any-hover/sidebar-row:static",
-                            )}
-                          />
-                        }
-                      >
-                        <Undo2Icon className="mb-px size-3.5" />
-                      </TooltipTrigger>
-                      <TooltipPopup side="top">
-                        <T>Un-settle thread</T>
-                      </TooltipPopup>
-                    </Tooltip>
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <button
-                            type="button"
-                            aria-label={gt("Settle thread")}
-                            onClick={handleSettleClick}
-                            onPointerDown={handleActionPointerDown}
-                            className={cn(
-                              "pointer-events-none absolute inset-y-0 right-0 -mr-2 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                              isWoke && "group-any-hover/sidebar-row:static",
-                            )}
-                          />
-                        }
-                      >
-                        <CheckIcon className="size-3" />
-                      </TooltipTrigger>
-                      <TooltipPopup side="top">
-                        <T>Settle thread</T>
-                      </TooltipPopup>
-                    </Tooltip>
-                  )}
                   {jumpHintLabel ? <JumpHintBadge label={jumpHintLabel} /> : null}
                 </span>
               )}
@@ -1577,7 +1599,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               aria-current={accessibility.current}
               data-testid="sidebar-row-card"
               aria-busy={isRegeneratingTitle || undefined}
-              className={rowSurfaceClassName}
+              className={cn(
+                rowSurfaceClassName,
+                isAttachedActive && "md:w-[calc(100%+var(--sidebar-content-inset))]",
+              )}
               onClick={handleClick}
               onDoubleClick={handleDoubleClick}
               onKeyDown={handleKeyDown}
@@ -1588,6 +1613,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           <div
             className={cn(
               "relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
+              isAttachedActive && "md:pe-4.5",
               metaLineEmpty && "h-auto",
             )}
           >
