@@ -901,7 +901,9 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
-      Layer.provide(FleetPanelHttp.layer.pipe(Layer.provide(FleetPanelService.layer))),
+      Layer.provide(
+        FleetPanelHttp.layer.pipe(Layer.provide(FleetPanelService.FleetPanelService.layer)),
+      ),
       Layer.provide(speechHttpApiLayer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
