@@ -51,7 +51,7 @@ function BoringSidebarRow() {
     <SettingsRow
       {...searchableSetting("boring-sidebar")}
       description={gt(
-        "Group sidebar threads into project folders. Pinned threads stay on top, and Snoozed and Settled stay below the folders.",
+        "Group sidebar threads into project folders. Pinned threads stay on top, and Working, Snoozed, and Settled stay below the folders.",
       )}
       control={
         <Switch

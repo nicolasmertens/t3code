@@ -13,6 +13,7 @@ import {
   resolveProjectExpanded,
   setProjectExpanded,
   type UiState,
+  useUiStateStore,
 } from "./uiStateStore";
 
 function makeUiState(overrides: Partial<UiState> = {}): UiState {
@@ -24,6 +25,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     sidebarUrgencyOrder: true,
     sidebarAutoCollapseDone: false,
     sidebarStatusGroupExpandedById: {},
+    sidebarShelfFolderExpandedById: {},
     threadLastVisitedAtById: {},
     defaultAdvertisedEndpointKey: null,
     pullRequestMergeMethod: "merge",
@@ -126,6 +128,7 @@ describe("parsePersistedState", () => {
       sidebarUrgencyOrder: true,
       sidebarAutoCollapseDone: false,
       sidebarStatusGroupExpandedById: {},
+      sidebarShelfFolderExpandedById: {},
       pullRequestMergeMethod: "merge",
     });
   });
@@ -217,6 +220,7 @@ describe("uiStateStore persistence", () => {
       sidebarUrgencyOrder: true,
       sidebarAutoCollapseDone: false,
       sidebarStatusGroupExpandedById: {},
+      sidebarShelfFolderExpandedById: {},
       pullRequestMergeMethod: "merge",
     });
     expect(parsePersistedState(persisted)).toEqual({
@@ -265,5 +269,36 @@ describe("uiStateStore persistence", () => {
       parsePersistedState({ sidebarProjectScopeKey: "github.com/pingdotgg/t3code" })
         .sidebarProjectScopeKeys,
     ).toEqual(["github.com/pingdotgg/t3code"]);
+  });
+
+  it("persists and updates shelf project folder expansion state", () => {
+    const prev = useUiStateStore.getState();
+    try {
+      useUiStateStore.setState({ ...prev, sidebarShelfFolderExpandedById: {} });
+      useUiStateStore.getState().setShelfFolderExpanded("working:proj-a", false);
+      expect(useUiStateStore.getState().sidebarShelfFolderExpandedById).toEqual({
+        "working:proj-a": false,
+      });
+
+      useUiStateStore.getState().setShelfFoldersExpandedBatch([
+        ["working:proj-a", true],
+        ["settled:proj-b", false],
+      ]);
+      expect(useUiStateStore.getState().sidebarShelfFolderExpandedById).toEqual({
+        "working:proj-a": true,
+        "settled:proj-b": false,
+      });
+
+      persistState(useUiStateStore.getState());
+      const persisted = JSON.parse(
+        localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+      ) as PersistedUiState;
+      expect(parsePersistedState(persisted).sidebarShelfFolderExpandedById).toEqual({
+        "working:proj-a": true,
+        "settled:proj-b": false,
+      });
+    } finally {
+      useUiStateStore.setState(prev, true);
+    }
   });
 });

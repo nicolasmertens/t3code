@@ -80,6 +80,7 @@ function setupSidebarMocks(
     sidebarUrgencyOrder: true,
     sidebarAutoCollapseDone: false,
     sidebarStatusGroupExpandedById: {},
+    sidebarShelfFolderExpandedById: {},
   });
 
   const moveMock = vi.fn(async () => AsyncResult.success(undefined));
@@ -297,5 +298,147 @@ describe("sidebar queue grouping and triage", () => {
         input: { threadId: scratchThread.id, projectId: humble.id },
       }),
     );
+  });
+
+  it("folds working threads into the bottom Working shelf in By project mode and groups Working, Snoozed, and Settled by project", async () => {
+    using stack = new DisposableStack();
+    for (const key of [
+      "t3code:sidebar:working-expanded",
+      "t3code:sidebar:snoozed-expanded",
+      "t3code:sidebar:settled-expanded",
+    ]) {
+      const previous = localStorage.getItem(key);
+      stack.defer(() => {
+        if (previous === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, previous);
+      });
+      localStorage.setItem(key, "false");
+    }
+
+    const fleet = makeProject("fleet", "Fleet Architecture");
+    const godwit = makeProject("godwit", "GodWit Mail");
+
+    const latestCompletedRun = {
+      runId: "run-1" as never,
+      status: "completed" as const,
+      requestedAt: "2026-03-10T10:00:00.000Z",
+      startedAt: "2026-03-10T10:00:05.000Z",
+      completedAt: "2026-03-10T10:05:00.000Z",
+      assistantMessageId: null,
+    };
+
+    const activeThread = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-active"),
+      projectId: fleet.id,
+      title: "Idle Fleet Thread",
+      latestRun: latestCompletedRun,
+      lastVisitedAt: "2026-03-10T10:06:00.000Z",
+    });
+    const workingFleet = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-working-fleet"),
+      projectId: fleet.id,
+      title: "Working Fleet Task",
+      runtime: {
+        status: "running",
+        activeRunId: null,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerName: "Codex",
+        lastError: null,
+        updatedAt: "2026-03-10T11:30:00.000Z",
+      },
+    });
+    const workingGodwit = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-working-godwit"),
+      projectId: godwit.id,
+      title: "Working GodWit Task",
+      runtime: {
+        status: "running",
+        activeRunId: null,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerName: "Codex",
+        lastError: null,
+        updatedAt: "2026-03-10T11:31:00.000Z",
+      },
+    });
+    const snoozedGodwit = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-snoozed-godwit"),
+      projectId: godwit.id,
+      title: "Snoozed GodWit Task",
+      snoozedAt: "2026-03-10T11:00:00.000Z",
+      snoozedUntil: "2026-03-10T15:00:00.000Z",
+    });
+    const settledFleet = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-settled-fleet"),
+      projectId: fleet.id,
+      title: "Settled Fleet Task",
+      settledOverride: "settled",
+      settledAt: "2026-03-10T10:30:00.000Z",
+      latestRun: latestCompletedRun,
+      lastVisitedAt: "2026-03-10T10:04:00.000Z",
+    });
+
+    setupSidebarMocks(
+      stack,
+      [fleet, godwit],
+      [activeThread, workingFleet, workingGodwit, snoozedGodwit, settledFleet],
+      activeThread,
+    );
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, sidebarWorkingShelfEnabled: true });
+    useUiStateStore.getState().setSidebarGroupMode("project");
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+      { router: `/local/${activeThread.id}` },
+    );
+
+    // Working shelf appears at the bottom in By project mode and hides working tasks until expanded.
+    const workingHeader = screen.getByTestId("sidebar-working-shelf-toggle");
+    await expect.element(workingHeader).toBeVisible();
+    expect(screen.container.textContent).not.toContain("Working Fleet Task");
+
+    // Expand Working, Snoozed, and Settled shelves.
+    await userEvent.click(workingHeader);
+    await userEvent.click(screen.getByTestId("sidebar-snoozed-shelf-toggle"));
+    await userEvent.click(screen.getByTestId("sidebar-settled-shelf-toggle"));
+
+    // All three shelves group their threads under per-project folders.
+    await expect.element(screen.getByText("Working Fleet Task")).toBeVisible();
+    await expect.element(screen.getByText("Working GodWit Task")).toBeVisible();
+    await expect.element(screen.getByText("Snoozed GodWit Task")).toBeVisible();
+    await expect.element(screen.getByText("Settled Fleet Task")).toBeVisible();
+
+    expect(
+      screen.container.querySelectorAll('[data-testid="sidebar-working-project-folder"]').length,
+    ).toBe(2);
+    expect(
+      screen.container.querySelectorAll('[data-testid="sidebar-snoozed-project-folder"]').length,
+    ).toBe(1);
+    expect(
+      screen.container.querySelectorAll('[data-testid="sidebar-settled-project-folder"]').length,
+    ).toBe(1);
+
+    // Collapsing Fleet inside Working hides Working Fleet Task while leaving the top Fleet folder open.
+    const workingFleetFolderBtn = Array.from(
+      screen.container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="sidebar-working-project-folder"] button',
+      ),
+    ).find((btn) => btn.textContent?.includes("Fleet Architecture"));
+    expect(workingFleetFolderBtn).toBeDefined();
+    await userEvent.click(workingFleetFolderBtn!);
+    expect(screen.container.textContent).not.toContain("Working Fleet Task");
+    await expect.element(screen.getByText("Idle Fleet Thread")).toBeVisible();
+
+    // Toggling Working section off in the group menu moves working tasks back into top project folders.
+    await userEvent.click(screen.getByTestId("sidebar-group-mode-trigger"));
+    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /Working section/ }));
+    await expect.element(screen.getByText("Working Fleet Task")).toBeVisible();
+    expect(screen.container.querySelector('[data-testid="sidebar-working-header"]')).toBeNull();
   });
 });

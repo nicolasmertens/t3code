@@ -38,10 +38,12 @@ export function SidebarGroupModeMenu(props: {
   urgencyOrder: boolean;
   autoCollapseDone: boolean;
   multilineRows: boolean;
+  workingShelfEnabled: boolean;
   onModeChange: (mode: SidebarQueueGroupMode) => void;
   onUrgencyOrderChange: (enabled: boolean) => void;
   onAutoCollapseDoneChange: (enabled: boolean) => void;
   onMultilineRowsChange: (enabled: boolean) => void;
+  onWorkingShelfEnabledChange: (enabled: boolean) => void;
   onExpandAll: () => void;
   onCollapseDone: () => void;
   onCollapseAll: () => void;
@@ -51,6 +53,15 @@ export function SidebarGroupModeMenu(props: {
   const isGrouped = props.mode !== "flat";
   const ModeIcon =
     props.mode === "project" ? FolderKanbanIcon : props.mode === "status" ? LayersIcon : ListIcon;
+  const workingShelfSwitch = (
+    <MenuCheckboxItem
+      variant="switch"
+      checked={props.workingShelfEnabled}
+      onCheckedChange={(checked) => props.onWorkingShelfEnabledChange(Boolean(checked))}
+    >
+      <T>Working section</T>
+    </MenuCheckboxItem>
+  );
 
   return (
     <Menu>
@@ -160,9 +171,15 @@ export function SidebarGroupModeMenu(props: {
                   <T>Two-line rows</T>
                 </MenuCheckboxItem>
               ) : null}
+              {workingShelfSwitch}
             </MenuGroup>
           </>
-        ) : null}
+        ) : (
+          <>
+            <MenuSeparator />
+            <MenuGroup>{workingShelfSwitch}</MenuGroup>
+          </>
+        )}
       </MenuPopup>
     </Menu>
   );

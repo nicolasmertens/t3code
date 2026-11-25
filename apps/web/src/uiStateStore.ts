@@ -34,6 +34,7 @@ export interface PersistedUiState {
   sidebarUrgencyOrder?: boolean;
   sidebarAutoCollapseDone?: boolean;
   sidebarStatusGroupExpandedById?: Record<string, boolean>;
+  sidebarShelfFolderExpandedById?: Record<string, boolean>;
   pullRequestMergeMethod?: string;
 }
 
@@ -45,6 +46,7 @@ export interface UiProjectState {
   sidebarUrgencyOrder: boolean;
   sidebarAutoCollapseDone: boolean;
   sidebarStatusGroupExpandedById: Record<string, boolean>;
+  sidebarShelfFolderExpandedById: Record<string, boolean>;
 }
 
 export interface UiThreadState {
@@ -70,6 +72,7 @@ const initialState: UiState = {
   sidebarUrgencyOrder: true,
   sidebarAutoCollapseDone: false,
   sidebarStatusGroupExpandedById: {},
+  sidebarShelfFolderExpandedById: {},
   threadLastVisitedAtById: {},
   defaultAdvertisedEndpointKey: null,
   pullRequestMergeMethod: "merge",
@@ -172,6 +175,7 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
         ? parsed.sidebarAutoCollapseDone
         : initialState.sidebarAutoCollapseDone,
     sidebarStatusGroupExpandedById: sanitizeBooleanRecord(parsed.sidebarStatusGroupExpandedById),
+    sidebarShelfFolderExpandedById: sanitizeBooleanRecord(parsed.sidebarShelfFolderExpandedById),
     pullRequestMergeMethod: isPullRequestMergeMethod(parsed.pullRequestMergeMethod)
       ? parsed.pullRequestMergeMethod
       : initialState.pullRequestMergeMethod,
@@ -222,6 +226,7 @@ export function persistState(state: UiState): void {
         sidebarUrgencyOrder: state.sidebarUrgencyOrder,
         sidebarAutoCollapseDone: state.sidebarAutoCollapseDone,
         sidebarStatusGroupExpandedById: state.sidebarStatusGroupExpandedById,
+        sidebarShelfFolderExpandedById: state.sidebarShelfFolderExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
       } satisfies PersistedUiState),
     );
@@ -434,6 +439,34 @@ function setStatusGroupsExpandedBatch(
   return changed ? { ...state, sidebarStatusGroupExpandedById: next } : state;
 }
 
+function setShelfFolderExpanded(state: UiState, folderKey: string, expanded: boolean): UiState {
+  if (state.sidebarShelfFolderExpandedById[folderKey] === expanded) {
+    return state;
+  }
+  return {
+    ...state,
+    sidebarShelfFolderExpandedById: {
+      ...state.sidebarShelfFolderExpandedById,
+      [folderKey]: expanded,
+    },
+  };
+}
+
+function setShelfFoldersExpandedBatch(
+  state: UiState,
+  entries: ReadonlyArray<readonly [string, boolean]>,
+): UiState {
+  let changed = false;
+  const next = { ...state.sidebarShelfFolderExpandedById };
+  for (const [key, expanded] of entries) {
+    if (next[key] !== expanded) {
+      next[key] = expanded;
+      changed = true;
+    }
+  }
+  return changed ? { ...state, sidebarShelfFolderExpandedById: next } : state;
+}
+
 function setProjectsExpandedBatch(
   state: UiState,
   entries: ReadonlyArray<readonly [readonly string[], boolean]>,
@@ -461,6 +494,8 @@ interface UiStateStore extends UiState {
   setSidebarAutoCollapseDone: (enabled: boolean) => void;
   setStatusGroupExpanded: (statusKey: string, expanded: boolean) => void;
   setStatusGroupsExpandedBatch: (entries: ReadonlyArray<readonly [string, boolean]>) => void;
+  setShelfFolderExpanded: (folderKey: string, expanded: boolean) => void;
+  setShelfFoldersExpandedBatch: (entries: ReadonlyArray<readonly [string, boolean]>) => void;
   setPullRequestMergeMethod: (method: PullRequestMergeMethod) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   setProjectsExpandedBatch: (entries: ReadonlyArray<readonly [readonly string[], boolean]>) => void;
@@ -489,6 +524,10 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => setStatusGroupExpanded(state, statusKey, expanded)),
   setStatusGroupsExpandedBatch: (entries) =>
     set((state) => setStatusGroupsExpandedBatch(state, entries)),
+  setShelfFolderExpanded: (folderKey, expanded) =>
+    set((state) => setShelfFolderExpanded(state, folderKey, expanded)),
+  setShelfFoldersExpandedBatch: (entries) =>
+    set((state) => setShelfFoldersExpandedBatch(state, entries)),
   setPullRequestMergeMethod: (method) => set((state) => setPullRequestMergeMethod(state, method)),
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),

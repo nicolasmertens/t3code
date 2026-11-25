@@ -294,6 +294,7 @@ import {
   SidebarStatusGroupHeader,
   sidebarStatusGroupRowId,
 } from "./sidebar/SidebarStatusGroupHeader";
+import { SidebarShelfProjectHeader } from "./sidebar/SidebarShelfProjectHeader";
 import { SidebarGroupModeMenu, SidebarTriageFilterBar } from "./sidebar/SidebarGroupingControls";
 import { SidebarPinnedStrip } from "./sidebar/SidebarPinnedStrip";
 import {
@@ -304,13 +305,17 @@ import {
   buildScratchProjectKeySet,
   countTriageBuckets,
   filterThreadsByTriage,
+  groupShelfThreadsByProject,
   groupThreadsByStatus,
   isEditableKeyboardTarget,
   isScratchThread,
   isSidebarGroupDoneOnly,
   parseSidebarFolderDropProjectKey,
   resolveEffectiveSidebarGroupMode,
+  sidebarShelfFolderRowId,
+  sidebarShelfFolderStateKey,
   sortProjectFoldersByUrgency,
+  type SidebarShelfKey,
   type SidebarStatusBucketKey,
   type SidebarTriageFilter,
 } from "./sidebar/sidebarGrouping.logic";
@@ -502,9 +507,7 @@ function useSidebarThreads(input: {
     keepEmptyFolders: keepEmpty,
   } = input;
   const shelfRouteThreadKey = routeRowThreadKey === departingThreadKey ? null : routeRowThreadKey;
-  // Grouped modes already separate the work, so they have no Working shelf.
-  const workingShelfEnabled =
-    useClientSettings((s) => s.sidebarWorkingShelfEnabled) && groupMode === "flat";
+  const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const inboxReturnsVersion = useSyncExternalStore(
     inboxReturns.subscribe,
     inboxReturns.getSnapshot,
@@ -532,6 +535,8 @@ function useSidebarThreads(input: {
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
   const statusGroupExpandedById = useUiStateStore((store) => store.sidebarStatusGroupExpandedById);
   const setStatusGroupExpanded = useUiStateStore((store) => store.setStatusGroupExpanded);
+  const shelfFolderExpandedById = useUiStateStore((store) => store.sidebarShelfFolderExpandedById);
+  const setShelfFolderExpanded = useUiStateStore((store) => store.setShelfFolderExpanded);
   const localLastVisitedAtById = useUiStateStore((store) => store.threadLastVisitedAtById);
   const [settledTail, setSettledTail] = useState({
     scopeKey: projectScopeKey,
@@ -605,6 +610,65 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
+  const buildShelfProjectFolders = (
+    shelf: SidebarShelfKey,
+    shelfExpanded: boolean,
+    shelfThreads: readonly EnvironmentThreadShell[],
+    peekRouteThreadKey: string | null,
+  ) => {
+    if (groupMode !== "project" || folderGroups === null || !shelfExpanded) return null;
+    const { folders, ungroupedThreads } = groupShelfThreadsByProject(folderGroups, shelfThreads);
+    return {
+      folders: folders.map((folder) => {
+        const stateKey = sidebarShelfFolderStateKey(shelf, folder.group.projectKey);
+        const collapsed = shelfFolderExpandedById[stateKey] === false;
+        const visibleRows = collapsed
+          ? routeThreadOnly(folder.threads, peekRouteThreadKey)
+          : folder.threads;
+        return {
+          group: folder.group,
+          collapsed,
+          totalCount: folder.threads.length,
+          threads: visibleRows,
+        };
+      }),
+      ungroupedThreads,
+    };
+  };
+  const workingShelfFolders = buildShelfProjectFolders(
+    "working",
+    workingShelfExpanded,
+    visibleWorkingThreads,
+    routeRowThreadKey,
+  );
+  const snoozedShelfFolders = buildShelfProjectFolders(
+    "snoozed",
+    snoozedShelfExpanded,
+    visibleSnoozedThreads,
+    shelfRouteThreadKey,
+  );
+  const settledShelfFolders = buildShelfProjectFolders(
+    "settled",
+    settledShelfExpanded,
+    renderedSettledThreads,
+    shelfRouteThreadKey,
+  );
+  const flattenShelfThreads = (
+    shelfFolders: ReturnType<typeof buildShelfProjectFolders>,
+    fallback: readonly EnvironmentThreadShell[],
+  ): readonly EnvironmentThreadShell[] =>
+    shelfFolders !== null
+      ? [
+          ...shelfFolders.folders.flatMap((folder) => folder.threads),
+          ...shelfFolders.ungroupedThreads,
+        ]
+      : fallback;
+  const shelfListedWorkingThreads = flattenShelfThreads(workingShelfFolders, visibleWorkingThreads);
+  const shelfListedSnoozedThreads = flattenShelfThreads(snoozedShelfFolders, visibleSnoozedThreads);
+  const shelfListedSettledThreads = flattenShelfThreads(
+    settledShelfFolders,
+    renderedSettledThreads,
+  );
   const projectFolders =
     groupMode !== "project" || folderGroups === null
       ? null
@@ -680,9 +744,9 @@ function useSidebarThreads(input: {
       : statusGroups !== null
         ? statusGroups.flatMap((bucket) => bucket.threads)
         : filteredActiveThreads),
-    ...visibleWorkingThreads,
-    ...visibleSnoozedThreads,
-    ...renderedSettledThreads,
+    ...shelfListedWorkingThreads,
+    ...shelfListedSnoozedThreads,
+    ...shelfListedSettledThreads,
   ];
   const sectionByThreadKey = new Map<string, SidebarSection>();
   for (const [list, section] of [
@@ -724,6 +788,9 @@ function useSidebarThreads(input: {
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
     projectFolders,
     statusGroups,
+    workingShelfFolders,
+    snoozedShelfFolders,
+    settledShelfFolders,
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
       const keys = sidebarFolderExpansionKeys(group);
       setProjectExpanded(keys, !resolveProjectExpanded(projectExpandedById, keys));
@@ -731,9 +798,13 @@ function useSidebarThreads(input: {
     toggleStatusGroup: (bucketKey: SidebarStatusBucketKey) => {
       setStatusGroupExpanded(bucketKey, statusGroupExpandedById[bucketKey] === false);
     },
-    renderedSettledThreads,
-    visibleSnoozedThreads,
-    visibleWorkingThreads,
+    toggleShelfProjectFolder: (shelf: SidebarShelfKey, group: SidebarProjectSnapshot) => {
+      const key = sidebarShelfFolderStateKey(shelf, group.projectKey);
+      setShelfFolderExpanded(key, shelfFolderExpandedById[key] === false);
+    },
+    shelfListedSettledThreads,
+    shelfListedSnoozedThreads,
+    shelfListedWorkingThreads,
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
     settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
@@ -817,10 +888,10 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   }
   // Availability gates dragging only; sorting must stay consistent across clients.
   const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-  const sortedActive = sortActiveBySend
-    ? sortWorkingThreadsBySend(active)
-    : workingShelfEnabled
-      ? sortInboxThreadsByReturn(active, inboxObservation.returnedAt)
+  const sortedActive = workingShelfEnabled
+    ? sortInboxThreadsByReturn(active, inboxObservation.returnedAt)
+    : sortActiveBySend
+      ? sortWorkingThreadsBySend(active)
       : sortThreadsForSidebar(active);
   return {
     pinnedThreads:
@@ -1133,6 +1204,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const setProjectsExpandedBatch = useUiStateStore((store) => store.setProjectsExpandedBatch);
   const setStatusGroupsExpandedBatch = useUiStateStore(
     (store) => store.setStatusGroupsExpandedBatch,
+  );
+  const setShelfFoldersExpandedBatch = useUiStateStore(
+    (store) => store.setShelfFoldersExpandedBatch,
   );
   const groupMode = resolveEffectiveSidebarGroupMode(persistedGroupMode, boringSidebarEnabled);
   const isGroupedMode = groupMode !== "flat";
@@ -1496,11 +1570,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleWorkingShelf,
     projectFolders,
     statusGroups,
+    workingShelfFolders,
+    snoozedShelfFolders,
+    settledShelfFolders,
     toggleProjectFolder,
     toggleStatusGroup,
-    renderedSettledThreads,
-    visibleSnoozedThreads,
-    visibleWorkingThreads,
+    toggleShelfProjectFolder,
+    shelfListedSettledThreads,
+    shelfListedSnoozedThreads,
+    shelfListedWorkingThreads,
     orderedThreadKeys,
     threadByKey,
     settledThreadKeys,
@@ -1571,12 +1649,28 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     toggleStatusGroup(bucketKey);
   };
+  const shelfFolderBatchEntries = (expanded: boolean) => {
+    const entries: Array<readonly [string, boolean]> = [];
+    for (const [shelf, shelfFolders] of [
+      ["working", workingShelfFolders],
+      ["snoozed", snoozedShelfFolders],
+      ["settled", settledShelfFolders],
+    ] as const) {
+      if (shelfFolders === null) continue;
+      for (const folder of shelfFolders.folders) {
+        entries.push([sidebarShelfFolderStateKey(shelf, folder.group.projectKey), expanded]);
+      }
+    }
+    return entries;
+  };
   const handleExpandAllGroups = () => {
     if (projectFolders !== null) {
       setAutoCollapseOpenedKeys(new Set(projectFolders.map((folder) => folder.group.projectKey)));
       setProjectsExpandedBatch(
         projectFolders.map((folder) => [sidebarFolderExpansionKeys(folder.group), true] as const),
       );
+      const shelfEntries = shelfFolderBatchEntries(true);
+      if (shelfEntries.length > 0) setShelfFoldersExpandedBatch(shelfEntries);
       return;
     }
     if (statusGroups !== null) {
@@ -1592,6 +1686,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       setProjectsExpandedBatch(
         projectFolders.map((folder) => [sidebarFolderExpansionKeys(folder.group), false] as const),
       );
+      const shelfEntries = shelfFolderBatchEntries(false);
+      if (shelfEntries.length > 0) setShelfFoldersExpandedBatch(shelfEntries);
       return;
     }
     if (statusGroups !== null) {
@@ -2440,14 +2536,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     items.push(...activeRows);
     if (workingThreads.length > 0) {
       items.push({ kind: "marker", marker: "working-header" });
-      items.push(...rowsOf(visibleWorkingThreads, "working"));
+      items.push(...rowsOf(shelfListedWorkingThreads, "working"));
     }
     if (snoozedThreads.length > 0) {
       items.push({ kind: "marker", marker: "snoozed-header" });
-      items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
+      items.push(...rowsOf(shelfListedSnoozedThreads, "snoozed"));
     }
     items.push({ kind: "marker", marker: "settled-header" });
-    const settledRows = rowsOf(renderedSettledThreads, "settled");
+    const settledRows = rowsOf(shelfListedSettledThreads, "settled");
     items.push({ kind: "marker", marker: "settled-placeholder" });
     items.push(...settledRows);
     return items;
@@ -2475,6 +2571,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
   }, [cancelThreadDrag, dragState, sidebarListItems]);
   // Only order, section, or draft changes need layout reads and motion.
+  const serializeShelfFolders = (folders: typeof workingShelfFolders) =>
+    folders?.folders
+      .map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
+      .join("\n") ?? "";
   const listMotionLayoutKey = [
     sidebarListItemsKey,
     groupMode,
@@ -2483,6 +2583,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
       .join("\n") ?? "",
     statusGroups?.map((bucket) => `${bucket.key}:${bucket.threads.length}`).join("\n") ?? "",
+    serializeShelfFolders(workingShelfFolders),
+    serializeShelfFolders(snoozedShelfFolders),
+    serializeShelfFolders(settledShelfFolders),
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",
   ].join("\0");
@@ -3645,6 +3748,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   urgencyOrder={sidebarUrgencyOrder}
                   autoCollapseDone={sidebarAutoCollapseDone}
                   multilineRows={folderRowsMultiline}
+                  workingShelfEnabled={workingShelfEnabled}
                   onModeChange={handleGroupModeChange}
                   onUrgencyOrderChange={setSidebarUrgencyOrder}
                   onAutoCollapseDoneChange={(enabled) => {
@@ -3653,6 +3757,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   }}
                   onMultilineRowsChange={(enabled) => {
                     void updateClientSettings({ boringSidebarMultilineRows: enabled });
+                  }}
+                  onWorkingShelfEnabledChange={(enabled) => {
+                    void updateClientSettings({ sidebarWorkingShelfEnabled: enabled });
                   }}
                   onExpandAll={handleExpandAllGroups}
                   onCollapseDone={handleCollapseDoneGroups}
@@ -4249,12 +4356,47 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           />,
                         );
                       }
+                      const pushShelfProjectFolders = (
+                        shelf: SidebarShelfKey,
+                        shelfFolders: NonNullable<typeof workingShelfFolders>,
+                      ) => {
+                        for (const folder of shelfFolders.folders) {
+                          const folderRowId = sidebarShelfFolderRowId(
+                            shelf,
+                            folder.group.projectKey,
+                          );
+                          items.push(
+                            <SidebarShelfProjectHeader
+                              key={folderRowId}
+                              shelf={shelf}
+                              group={folder.group}
+                              collapsed={folder.collapsed}
+                              totalCount={folder.totalCount}
+                              onToggle={toggleShelfProjectFolder}
+                              onContextMenu={handleProjectFolderContextMenu}
+                            />,
+                          );
+                          for (const thread of folder.threads) {
+                            items.push(renderThreadRow(thread, shelf, folderRowId));
+                          }
+                        }
+                        for (const thread of shelfFolders.ungroupedThreads) {
+                          items.push(renderThreadRow(thread, shelf));
+                        }
+                      };
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           // Grouped modes draw pinned and active rows in their own containers below.
                           if (
                             isGroupedMode &&
                             (item.section === "active" || item.section === "pinned")
+                          ) {
+                            continue;
+                          }
+                          if (
+                            (item.section === "working" && workingShelfFolders !== null) ||
+                            (item.section === "snoozed" && snoozedShelfFolders !== null) ||
+                            (item.section === "settled" && settledShelfFolders !== null)
                           ) {
                             continue;
                           }
@@ -4434,6 +4576,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 }}
                               />,
                             );
+                            if (workingShelfFolders !== null) {
+                              pushShelfProjectFolders("working", workingShelfFolders);
+                            }
                             break;
                           case "snoozed-header":
                             items.push(
@@ -4449,6 +4594,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 }}
                               />,
                             );
+                            if (snoozedShelfFolders !== null) {
+                              pushShelfProjectFolders("snoozed", snoozedShelfFolders);
+                            }
                             break;
                           case "settled-header":
                             items.push(
@@ -4477,15 +4625,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 label={gt("Settled", { $context: "sidebar section" })}
                                 showHint={
                                   from !== null &&
-                                  (renderedSettledThreads.length === 0 ||
+                                  (shelfListedSettledThreads.length === 0 ||
                                     (from === "settled" &&
-                                      renderedSettledThreads.length === 1 &&
+                                      shelfListedSettledThreads.length === 1 &&
                                       dragTargetSection !== null &&
                                       dragTargetSection !== "settled"))
                                 }
                                 isDropTarget={dragTargetSection === "settled"}
                               />,
                             );
+                            if (settledShelfFolders !== null) {
+                              pushShelfProjectFolders("settled", settledShelfFolders);
+                            }
                             break;
                         }
                       }

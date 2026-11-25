@@ -13,6 +13,7 @@ import type { SidebarQueueGroupMode } from "../../uiStateStore";
 
 export type SidebarTriageFilter = "all" | "attention" | "done" | "no-project";
 export type SidebarStatusBucketKey = "attention" | "active" | "done";
+export type SidebarShelfKey = "working" | "snoozed" | "settled";
 
 export interface SidebarThreadTriage {
   readonly status: SidebarThreadStatus;
@@ -254,6 +255,59 @@ export function groupThreadsByStatus(
   if (active.length > 0) buckets.push({ key: "active", threads: active });
   if (done.length > 0) buckets.push({ key: "done", threads: done });
   return buckets;
+}
+
+export function sidebarShelfFolderStateKey(shelf: SidebarShelfKey, projectKey: string): string {
+  return `${shelf}:${projectKey}`;
+}
+
+export function sidebarShelfFolderRowId(shelf: SidebarShelfKey, projectKey: string): string {
+  return `shelf:${shelf}:folder:${projectKey}`;
+}
+
+export interface SidebarShelfProjectGroup<TGroup, TThread> {
+  readonly group: TGroup;
+  readonly threads: TThread[];
+}
+
+/**
+ * Groups a shelf's threads by project folder, ordered by first appearance in `threads`.
+ * Threads whose project is not in `groups` stay in `ungroupedThreads`.
+ */
+export function groupShelfThreadsByProject<
+  TGroup extends Pick<SidebarProjectSnapshot, "projectKey" | "memberProjectRefs">,
+  TThread extends Pick<EnvironmentThreadShell, "environmentId" | "projectId">,
+>(
+  groups: readonly TGroup[],
+  threads: readonly TThread[],
+): {
+  readonly folders: Array<SidebarShelfProjectGroup<TGroup, TThread>>;
+  readonly ungroupedThreads: TThread[];
+} {
+  const groupByProject = new Map<string, TGroup>();
+  for (const group of groups) {
+    for (const ref of group.memberProjectRefs) {
+      groupByProject.set(`${ref.environmentId}:${ref.projectId}`, group);
+    }
+  }
+  const folders: Array<SidebarShelfProjectGroup<TGroup, TThread>> = [];
+  const folderByKey = new Map<string, SidebarShelfProjectGroup<TGroup, TThread>>();
+  const ungroupedThreads: TThread[] = [];
+  for (const thread of threads) {
+    const group = groupByProject.get(`${thread.environmentId}:${thread.projectId}`);
+    if (group === undefined) {
+      ungroupedThreads.push(thread);
+      continue;
+    }
+    let folder = folderByKey.get(group.projectKey);
+    if (folder === undefined) {
+      folder = { group, threads: [] };
+      folderByKey.set(group.projectKey, folder);
+      folders.push(folder);
+    }
+    folder.threads.push(thread);
+  }
+  return { folders, ungroupedThreads };
 }
 
 const SIDEBAR_FOLDER_DROP_PREFIX = "folder-drop:";

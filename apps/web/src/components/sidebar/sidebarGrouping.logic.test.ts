@@ -8,11 +8,14 @@ import {
   computeSidebarGroupRollup,
   countTriageBuckets,
   filterThreadsByTriage,
+  groupShelfThreadsByProject,
   groupThreadsByStatus,
   isSidebarGroupDoneOnly,
   parseSidebarFolderDropProjectKey,
   resolveEffectiveSidebarGroupMode,
   sidebarFolderDropId,
+  sidebarShelfFolderRowId,
+  sidebarShelfFolderStateKey,
   sortProjectFoldersByUrgency,
 } from "./sidebarGrouping.logic";
 
@@ -196,5 +199,37 @@ describe("sidebarGrouping.logic", () => {
     const id = sidebarFolderDropId("repo:github.com/acme/demo");
     expect(parseSidebarFolderDropProjectKey(id)).toBe("repo:github.com/acme/demo");
     expect(parseSidebarFolderDropProjectKey("sidebar-marker-active")).toBeNull();
+  });
+
+  it("groups shelf threads by project in first-appearance order while preserving unmatched threads", () => {
+    const groupA = {
+      projectKey: "proj-a",
+      memberProjectRefs: [{ environmentId: ENV, projectId: PROJ_A }],
+    };
+    const groupB = {
+      projectKey: "proj-b",
+      memberProjectRefs: [{ environmentId: ENV, projectId: PROJ_B }],
+    };
+    const groupEmpty = {
+      projectKey: "proj-empty",
+      memberProjectRefs: [{ environmentId: ENV, projectId: ProjectId.make("proj-empty") }],
+    };
+
+    const tB1 = makeThread("b-1", PROJ_B);
+    const tOrphan = makeThread("orphan", ProjectId.make("missing-proj"));
+    const tA1 = makeThread("a-1", PROJ_A);
+    const tB2 = makeThread("b-2", PROJ_B);
+
+    const grouped = groupShelfThreadsByProject(
+      [groupEmpty, groupA, groupB],
+      [tB1, tOrphan, tA1, tB2],
+    );
+    expect(grouped.folders.map((folder) => folder.group.projectKey)).toEqual(["proj-b", "proj-a"]);
+    expect(grouped.folders[0]!.threads.map((thread) => thread.id)).toEqual([tB1.id, tB2.id]);
+    expect(grouped.folders[1]!.threads.map((thread) => thread.id)).toEqual([tA1.id]);
+    expect(grouped.ungroupedThreads.map((thread) => thread.id)).toEqual([tOrphan.id]);
+
+    expect(sidebarShelfFolderStateKey("working", "proj-a")).toBe("working:proj-a");
+    expect(sidebarShelfFolderRowId("settled", "proj-a")).toBe("shelf:settled:folder:proj-a");
   });
 });
