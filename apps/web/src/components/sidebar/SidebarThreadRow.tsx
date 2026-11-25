@@ -1014,13 +1014,52 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   };
 
   const isAttachedActive = props.isActive && !props.sortable?.isDragging;
+  // Concave right-edge fillets ("funnel") that visually join the active tab's top/bottom borders
+  // into the 1px vertical sidebar divider so the row flows seamlessly into the main window.
+  const attachedTabFillets = isAttachedActive ? (
+    <>
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 10 10"
+        className="pointer-events-none absolute right-0 bottom-full hidden size-2.5 md:block"
+      >
+        <path
+          d="M 10 0 L 10 10 L 0 10 L 0 9.5 A 9.5 9.5 0 0 0 9.5 0 Z"
+          className="fill-background"
+        />
+        <path
+          d="M 0 9.5 A 9.5 9.5 0 0 0 9.5 0"
+          fill="none"
+          strokeWidth="1"
+          className="stroke-sidebar-border"
+        />
+      </svg>
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 10 10"
+        className="pointer-events-none absolute right-0 top-full hidden size-2.5 -scale-y-100 md:block"
+      >
+        <path
+          d="M 10 0 L 10 10 L 0 10 L 0 9.5 A 9.5 9.5 0 0 0 9.5 0 Z"
+          className="fill-background"
+        />
+        <path
+          d="M 0 9.5 A 9.5 9.5 0 0 0 9.5 0"
+          fill="none"
+          strokeWidth="1"
+          className="stroke-sidebar-border"
+        />
+      </svg>
+    </>
+  ) : null;
   const rowSurfaceClassName = cn(
-    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    "group/sidebar-row relative w-full cursor-pointer rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    !isAttachedActive && "overflow-hidden",
     variantAction === "unsettle" &&
       !props.isActive &&
       "[&:not(:hover):not(:focus-within)_*:not(.live-activity-focus_*)]:text-secondary-label",
     isAttachedActive
-      ? "z-10 bg-background text-sidebar-foreground border border-sidebar-border/70 md:rounded-r-none md:border-r-0"
+      ? "z-10 bg-background text-sidebar-foreground border border-sidebar-border md:rounded-r-none md:border-r-0"
       : props.isActive
         ? "bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70"
         : isSelected || props.sweepAction !== null
@@ -1325,10 +1364,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         {...sortableRootProps}
         {...(fileDropHandlers ?? {})}
         className={cn(
-          "list-none [content-visibility:auto] [contain-intrinsic-size:auto_--spacing(9)]",
-          metaLine !== null && multiline && "[contain-intrinsic-size:auto_--spacing(13.5)]",
+          "list-none",
+          !isAttachedActive &&
+            "[content-visibility:auto] [contain-intrinsic-size:auto_--spacing(9)]",
+          !isAttachedActive &&
+            metaLine !== null &&
+            multiline &&
+            "[contain-intrinsic-size:auto_--spacing(13.5)]",
           props.showGroupRail &&
             "relative before:pointer-events-none before:absolute before:inset-y-0 before:left-3.5 before:w-px before:bg-sidebar-border/70",
+          isAttachedActive && "relative z-10",
           sortable?.isDragging && "relative z-20",
         )}
       >
@@ -1353,7 +1398,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   // Lines titles up with the folder name, past its chevron and icon.
                   inFolder &&
                     (isAttachedActive && props.showGroupRail
-                      ? "ps-9 md:ms-5 md:w-[calc(100%-1.25rem+var(--sidebar-content-inset))] md:ps-4 md:pe-4.5"
+                      ? "ps-9 md:ms-7 md:w-[calc(100%-1.75rem+var(--sidebar-content-inset))] md:ps-2 md:pe-4.5"
                       : isAttachedActive
                         ? "ps-9 md:w-[calc(100%+var(--sidebar-content-inset))] md:pe-4.5"
                         : "ps-9"),
@@ -1368,6 +1413,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               />
             }
           >
+            {attachedTabFillets}
             {/* `contents` keeps one-line rows a single flex row. */}
             <div className={multiline ? "flex h-6 min-w-0 items-center gap-2.5" : "contents"}>
               {inFolder ? null : (
@@ -1579,10 +1625,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       // The hints are the rendered heights inside py-0.5. Revealing the open thread measures rows
       // that have not rendered yet, so a hint off by a pixel lands it a pixel short per row above.
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
+        "list-none py-0.5",
+        !isAttachedActive && "[content-visibility:auto] [contain-intrinsic-size:auto_78px]",
+        !isAttachedActive && metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
         props.showGroupRail &&
           "relative ps-3 before:pointer-events-none before:absolute before:inset-y-0 before:left-2 before:w-px before:bg-sidebar-border/70",
+        isAttachedActive && "relative z-10",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1610,6 +1658,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             />
           }
         >
+          {attachedTabFillets}
           <div
             className={cn(
               "relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
