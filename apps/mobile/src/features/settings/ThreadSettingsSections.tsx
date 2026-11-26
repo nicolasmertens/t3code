@@ -26,6 +26,7 @@ import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoi
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { useThreadListV2GroupingPreferences } from "../threads/use-thread-list-v2-grouping-preferences";
 import { planAutoSettleSettingsSync, type AutoSettleSettings } from "./autoSettleSettingsSync";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import {
@@ -214,10 +215,7 @@ export function AutoSettleSettingsRows(props: {
 
 export function WorkingSectionSettings() {
   const gt = useGT();
-  const savePreferences = useAtomCommand(saveMobilePreferences);
-  const preferences = useAtomValue(mobilePreferencesAtom);
-  const workingShelfEnabled =
-    AsyncResult.isSuccess(preferences) && preferences.value.workingShelfEnabled !== false;
+  const { workingShelfEnabled, setWorkingShelfEnabled } = useThreadListV2GroupingPreferences();
 
   return (
     <View className="gap-3">
@@ -226,9 +224,7 @@ export function WorkingSectionSettings() {
           icon="bolt.circle"
           label={gt("Working section")}
           value={workingShelfEnabled}
-          onValueChange={(value) => {
-            void savePreferences({ workingShelfEnabled: value });
-          }}
+          onValueChange={setWorkingShelfEnabled}
         />
       </SettingsSection>
       <Text className="px-2 text-sm text-foreground-muted">

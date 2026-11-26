@@ -555,3 +555,24 @@ describe("server model preferences", () => {
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
 });
+
+describe("sidebar queue preferences", () => {
+  it("defaults to empty object and round-trips partial and null groupMode values", () => {
+    expect(decodeServerSettings({}).sidebarQueuePreferences).toEqual({});
+    const patch = {
+      sidebarQueuePreferences: {
+        groupMode: null,
+        urgencyOrder: false,
+        autoCollapseDone: true,
+        workingShelfEnabled: false,
+        updatedAt: "2026-11-26T12:00:00.000Z",
+      },
+    };
+    expect(decodeServerSettingsPatch(patch)).toEqual(patch);
+    const decoded = decodeServerSettings(patch);
+    expect(decoded.sidebarQueuePreferences).toEqual(patch.sidebarQueuePreferences);
+    expect(encodeServerSettings(decoded).sidebarQueuePreferences).toEqual(
+      patch.sidebarQueuePreferences,
+    );
+  });
+});

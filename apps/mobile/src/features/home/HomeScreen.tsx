@@ -15,6 +15,7 @@ import {
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
+import type { SidebarTriageFilter } from "@t3tools/client-runtime/state/sidebar-grouping";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
@@ -80,6 +81,14 @@ import {
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
 } from "../threads/thread-list-v2-items";
+import {
+  ThreadListV2PinnedStrip,
+  ThreadListV2ProjectFolderHeader,
+  ThreadListV2ShelfProjectHeader,
+  ThreadListV2StatusGroupHeader,
+  ThreadListV2TriageEmptyRow,
+} from "../threads/thread-list-v2-grouping-items";
+import { OrganizeNoProjectSheet } from "../threads/OrganizeNoProjectSheet";
 import { useThreadRowProviderInstanceResolver } from "../threads/thread-provider-instance";
 import { useOpenThreadPullRequests } from "../threads/use-open-thread-pull-requests";
 import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
@@ -89,6 +98,10 @@ import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
 } from "../threads/threadListV2";
+import {
+  buildQueueGroupingHandlers,
+  useThreadListV2GroupingPreferences,
+} from "../threads/use-thread-list-v2-grouping-preferences";
 import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
@@ -102,7 +115,7 @@ import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-sw
 import { useFabScroll } from "./FabScrollContext";
 import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-launch-splash";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
-import { ThreadListFilters } from "./ThreadListFilters";
+import { ThreadListFilters, ThreadListTriageBar } from "./ThreadListFilters";
 import { deriveHomeEmptyState } from "./home-empty-state";
 
 interface HomeScreenProps {
@@ -321,18 +334,23 @@ export function HomeScreen(props: HomeScreenProps) {
     onScrollBeginDrag: handleScrollBeginDrag,
   });
 
-  const { projects, selectedEnvironmentId, projectGroupingMode } = props;
+  const { projects, selectedEnvironmentId, projectGroupingMode, projectSortOrder } = props;
   const projectScopes = useMemo(
     () =>
-      buildHomeProjectScopes(
-        {
-          projects,
-          environmentId: selectedEnvironmentId,
-          projectGroupingMode,
-        },
-        m,
-      ),
-    [projects, selectedEnvironmentId, projectGroupingMode, m],
+      sortHomeProjectScopes({
+        scopes: buildHomeProjectScopes(
+          {
+            projects,
+            environmentId: selectedEnvironmentId,
+            projectGroupingMode,
+          },
+          m,
+        ),
+        threads: props.threads,
+        pendingTasks: [],
+        projectSortOrder,
+      }),
+    [projects, selectedEnvironmentId, projectGroupingMode, m, props.threads, projectSortOrder],
   );
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const projectByKey = (() => {
@@ -391,12 +409,23 @@ export function HomeScreen(props: HomeScreenProps) {
     loaded: shelfPreferencesLoaded,
     settledShelfExpanded,
     snoozedShelfExpanded,
-    workingShelfEnabled,
     workingShelfExpanded,
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
   } = useThreadListV2ShelfPreferences();
+  const grouping = useThreadListV2GroupingPreferences();
+  const workingShelfEnabled = grouping.workingShelfEnabled;
+  const [rawTriageFilter, setTriageFilter] = useState<SidebarTriageFilter>("all");
+  const triageFilter = grouping.groupMode === "flat" ? "all" : rawTriageFilter;
+  const [autoCollapseOpenedKeys, setAutoCollapseOpenedKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [organizeSheetOpen, setOrganizeSheetOpen] = useState(false);
+  const canOrganizeNoProject = useMemo(
+    () => projectScopes.some((scope) => !scope.isScratch && !scope.archived),
+    [projectScopes],
+  );
   const now = useThreadListNow(props.threads);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
@@ -416,6 +445,11 @@ export function HomeScreen(props: HomeScreenProps) {
   const {
     layout: threadListV2Layout,
     items: threadListV2Items,
+    triageCounts,
+    projectFolderSummary,
+    statusGroupSummary,
+    shelfFolderKeys,
+    noProjectActiveThreads,
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
@@ -439,7 +473,28 @@ export function HomeScreen(props: HomeScreenProps) {
     snoozedShelfExpanded,
     settledShelfExpanded,
     selectedThreadKey,
+    groupMode: grouping.groupMode,
+    urgencyOrder: grouping.urgencyOrder,
+    autoCollapseDone: grouping.autoCollapseDone,
+    multilineRows: grouping.multilineRows,
+    triageFilter,
+    projectScopes,
+    collapsedProjectGroups: grouping.collapsedProjectGroups,
+    collapsedStatusGroups: grouping.collapsedStatusGroups,
+    collapsedShelfProjectGroups: grouping.collapsedShelfProjectGroups,
+    autoCollapseOpenedKeys,
+    canOrganizeNoProject,
   });
+  const { toggleProjectFolder, toggleStatusGroup, groupingMenuOptions } =
+    buildQueueGroupingHandlers({
+      grouping,
+      setTriageFilter,
+      autoCollapseOpenedKeys,
+      setAutoCollapseOpenedKeys,
+      projectFolderSummary,
+      statusGroupSummary,
+      shelfFolderKeys,
+    });
   // Called as `props.onSelectThread(...)`, the compiler would cache this handler on the whole
   // props object, which is new on every render of Home's parent.
   const { onSelectThread } = props;
@@ -497,6 +552,65 @@ export function HomeScreen(props: HomeScreenProps) {
         />
       );
     }
+    if (item.type === "v2-pinned-strip") {
+      return (
+        <ThreadListV2PinnedStrip
+          entries={item.entries}
+          count={item.count}
+          pane={sidebarSurface ? "sidebar" : "screen"}
+          selectedThreadKey={selectedThreadKey}
+          projectByKey={projectByKey}
+          settlementEnvironmentIds={settlementEnvironmentIds}
+          snoozeEnvironmentIds={snoozeEnvironmentIds}
+          snoozePresetsByEnvironmentId={snoozePresetsByEnvironmentId}
+          pinningEnvironmentIds={pinningEnvironmentIds}
+          onSelectThread={selectThread}
+          onUnpinThread={handleUnpinThread}
+          onSettleThread={handleSettleThread}
+          onSnoozeThread={handleSnoozeThread}
+          onRenameThread={handleRenameThread}
+          onDeleteThread={handleDeleteThread}
+        />
+      );
+    }
+    if (item.type === "v2-project-folder") {
+      return (
+        <ThreadListV2ProjectFolderHeader
+          item={item}
+          pane={sidebarSurface ? "sidebar" : "screen"}
+          onToggle={toggleProjectFolder}
+          onOrganize={() => setOrganizeSheetOpen(true)}
+          onNewThreadInProject={props.onNewThreadInProject}
+        />
+      );
+    }
+    if (item.type === "v2-status-group") {
+      return (
+        <ThreadListV2StatusGroupHeader
+          item={item}
+          pane={sidebarSurface ? "sidebar" : "screen"}
+          onToggle={toggleStatusGroup}
+        />
+      );
+    }
+    if (item.type === "v2-shelf-project-folder") {
+      return (
+        <ThreadListV2ShelfProjectHeader
+          item={item}
+          pane={sidebarSurface ? "sidebar" : "screen"}
+          onToggle={grouping.toggleShelfProjectFolder}
+        />
+      );
+    }
+    if (item.type === "v2-triage-empty") {
+      return (
+        <ThreadListV2TriageEmptyRow
+          item={item}
+          pane={sidebarSurface ? "sidebar" : "screen"}
+          onResetFilter={() => setTriageFilter("all")}
+        />
+      );
+    }
     if (item.type === "v2-working-shelf") {
       return (
         <ThreadListV2WorkingShelfHeader
@@ -544,6 +658,9 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozeWakeLabelText={item.snoozeWakeLabelText}
         timeLabel={item.timeLabel}
         showTrailingDivider={item.showTrailingDivider}
+        hideProjectIcon={item.hideProjectIcon}
+        compactRow={item.compactRow}
+        indentedInFolder={item.indentedInFolder}
         project={projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null}
         providerInstance={resolveProviderInstance(thread)}
         providers={providersByEnvironmentId.get(thread.environmentId)}
@@ -603,6 +720,8 @@ export function HomeScreen(props: HomeScreenProps) {
   // extraData changes invalidate every visible row; put the minute clock on items to limit updates.
   const v2ExtraData = {
     activeNewTask,
+    groupMode: grouping.groupMode,
+    multilineRows: grouping.multilineRows,
     projectByKey,
     projectTitleByProjectKey: v2ProjectTitleByProjectKey,
     listEnvironments,
@@ -687,14 +806,7 @@ export function HomeScreen(props: HomeScreenProps) {
         <ThreadListFilters
           gutter={sidebarSurface ? 8 : 0}
           environments={props.environments}
-          projects={pickableProjectGroups(
-            sortHomeProjectScopes({
-              scopes: projectScopes,
-              threads: props.threads,
-              pendingTasks: [],
-              projectSortOrder: "updated_at",
-            }),
-          ).map((scope) => ({
+          projects={pickableProjectGroups(projectScopes).map((scope) => ({
             key: scope.key,
             label: scope.title,
           }))}
@@ -702,8 +814,16 @@ export function HomeScreen(props: HomeScreenProps) {
           selectedProjectKey={props.selectedProjectKey}
           onEnvironmentChange={props.onEnvironmentChange}
           onProjectChange={props.onProjectChange}
+          grouping={groupingMenuOptions}
         />
       ) : null}
+      <ThreadListTriageBar
+        visible={grouping.groupMode !== "flat" && !hasSearchQuery}
+        counts={triageCounts}
+        selected={triageFilter}
+        onSelect={setTriageFilter}
+        gutter={sidebarSurface ? 8 : 0}
+      />
     </>
   );
 
@@ -836,6 +956,11 @@ export function HomeScreen(props: HomeScreenProps) {
           </SwipeableScrollGateProvider>
         </View>
       </ScreenContent>
+      <OrganizeNoProjectSheet
+        visible={organizeSheetOpen}
+        threads={noProjectActiveThreads}
+        onClose={() => setOrganizeSheetOpen(false)}
+      />
     </View>
   );
 }

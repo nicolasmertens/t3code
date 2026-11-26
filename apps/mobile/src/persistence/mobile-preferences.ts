@@ -17,6 +17,7 @@ import {
   type ProviderInstanceId,
   PullRequestMergeMethod,
   type SidebarProjectGroupingMode,
+  type SidebarQueueGroupMode,
 } from "@t3tools/contracts";
 import { ToolCallVisibility } from "@t3tools/contracts/settings";
 import type { AndroidNavigationStyle } from "../lib/androidNavigationStyle";
@@ -178,6 +179,13 @@ export interface Preferences {
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
   readonly threadListWorkingShelfExpanded?: boolean;
+  readonly threadListGroupMode?: SidebarQueueGroupMode;
+  readonly threadListUrgencyOrder?: boolean;
+  readonly threadListAutoCollapseDone?: boolean;
+  readonly threadListMultilineRows?: boolean;
+  readonly collapsedStatusGroups?: readonly string[];
+  readonly collapsedShelfProjectGroups?: readonly string[];
+  readonly sidebarQueuePreferencesSyncedAt?: string;
   readonly threadListFilters?: ThreadListFilters;
   readonly pullRequestListFilters?: PullRequestListPreferences;
   readonly workspaceSelections?: WorkspaceSelections;
@@ -267,6 +275,13 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
+    threadListGroupMode?: SidebarQueueGroupMode;
+    threadListUrgencyOrder?: boolean;
+    threadListAutoCollapseDone?: boolean;
+    threadListMultilineRows?: boolean;
+    collapsedStatusGroups?: readonly string[];
+    collapsedShelfProjectGroups?: readonly string[];
+    sidebarQueuePreferencesSyncedAt?: string;
     threadListFilters?: ThreadListFilters;
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
@@ -423,6 +438,39 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.threadListWorkingShelfExpanded === "boolean") {
     preferences.threadListWorkingShelfExpanded = parsed.threadListWorkingShelfExpanded;
+  }
+  if (
+    parsed.threadListGroupMode === "flat" ||
+    parsed.threadListGroupMode === "project" ||
+    parsed.threadListGroupMode === "status"
+  ) {
+    preferences.threadListGroupMode = parsed.threadListGroupMode;
+  }
+  if (typeof parsed.threadListUrgencyOrder === "boolean") {
+    preferences.threadListUrgencyOrder = parsed.threadListUrgencyOrder;
+  }
+  if (typeof parsed.threadListAutoCollapseDone === "boolean") {
+    preferences.threadListAutoCollapseDone = parsed.threadListAutoCollapseDone;
+  }
+  if (typeof parsed.threadListMultilineRows === "boolean") {
+    preferences.threadListMultilineRows = parsed.threadListMultilineRows;
+  }
+  if (Array.isArray(parsed.collapsedStatusGroups)) {
+    preferences.collapsedStatusGroups = parsed.collapsedStatusGroups.filter(
+      (key): key is string => typeof key === "string",
+    );
+  }
+  if (Array.isArray(parsed.collapsedShelfProjectGroups)) {
+    preferences.collapsedShelfProjectGroups = parsed.collapsedShelfProjectGroups.filter(
+      (key): key is string => typeof key === "string",
+    );
+  }
+  if (
+    typeof parsed.sidebarQueuePreferencesSyncedAt === "string" &&
+    parsed.sidebarQueuePreferencesSyncedAt.length > 0 &&
+    Number.isFinite(Date.parse(parsed.sidebarQueuePreferencesSyncedAt))
+  ) {
+    preferences.sidebarQueuePreferencesSyncedAt = parsed.sidebarQueuePreferencesSyncedAt;
   }
   if (isThreadListFilters(parsed.threadListFilters)) {
     preferences.threadListFilters = parsed.threadListFilters;

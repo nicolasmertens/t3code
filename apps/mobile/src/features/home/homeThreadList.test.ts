@@ -222,4 +222,30 @@ describe("home project scopes", () => {
     expect(findHomeProjectScope(scopes, "environment-local:missing")).toBeNull();
     expect(findHomeProjectScope(scopes, null)).toBeNull();
   });
+
+  it("marks scratch project scopes with isScratch", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const scratchProject: EnvironmentProject = {
+      ...makeProject({
+        environmentId,
+        id: ProjectId.make("project-scratch"),
+        title: "No project",
+      }),
+      isScratch: true,
+    };
+    const repoProject = makeProject({
+      environmentId,
+      id: ProjectId.make("project-repo"),
+      title: "Repo",
+    });
+
+    const scopes = buildHomeProjectScopes({
+      projects: [scratchProject, repoProject],
+      environmentId: null,
+      projectGroupingMode: "repository",
+    });
+
+    expect(scopes.find((scope) => scope.title === "No project")?.isScratch).toBe(true);
+    expect(scopes.find((scope) => scope.title === "Repo")?.isScratch).toBe(false);
+  });
 });

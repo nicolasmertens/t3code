@@ -3,6 +3,7 @@ import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
+import type { SidebarTriageFilter } from "@t3tools/client-runtime/state/sidebar-grouping";
 import {
   useAppearancePreferences,
   useAndroidFloatingTabs,
@@ -28,6 +29,10 @@ import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects } from "../../state/entities";
 import { steadyNavigationThreadShellsAtom } from "../../state/threads";
 import { useThreadSearch } from "../../state/queries";
+import {
+  buildQueueGroupingHandlers,
+  useThreadListV2GroupingPreferences,
+} from "./use-thread-list-v2-grouping-preferences";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 import { useThreadListNow } from "./use-thread-list-now";
 import { usePendingThreadOrder } from "../../state/thread-order";
@@ -56,6 +61,7 @@ import {
   sortHomeProjectScopes,
 } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
+import { ThreadListTriageBar } from "../home/ThreadListFilters";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
 import { useThreadListActions } from "../home/useThreadListActions";
 import { useFabScroll } from "../home/FabScrollContext";
@@ -69,6 +75,14 @@ import {
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
 } from "./thread-list-v2-items";
+import {
+  ThreadListV2PinnedStrip,
+  ThreadListV2ProjectFolderHeader,
+  ThreadListV2ShelfProjectHeader,
+  ThreadListV2StatusGroupHeader,
+  ThreadListV2TriageEmptyRow,
+} from "./thread-list-v2-grouping-items";
+import { OrganizeNoProjectSheet } from "./OrganizeNoProjectSheet";
 import { useThreadRowProviderInstanceResolver } from "./thread-provider-instance";
 import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
 import { ThreadPrDemandProvider } from "../../state/thread-pr-demand";
@@ -178,24 +192,22 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         : [];
   const projectScopes = useMemo(
     () =>
-      buildHomeProjectScopes(
-        {
-          projects,
-          environmentId: options.selectedEnvironmentId,
-          projectGroupingMode: options.projectGroupingMode,
-        },
-        messages,
-      ),
-    [projects, options.selectedEnvironmentId, options.projectGroupingMode, messages],
+      sortHomeProjectScopes({
+        scopes: buildHomeProjectScopes(
+          {
+            projects,
+            environmentId: options.selectedEnvironmentId,
+            projectGroupingMode: options.projectGroupingMode,
+          },
+          messages,
+        ),
+        threads,
+        pendingTasks: [],
+        projectSortOrder: "updated_at",
+      }),
+    [projects, options.selectedEnvironmentId, options.projectGroupingMode, messages, threads],
   );
-  const projectFilterOptions = pickableProjectGroups(
-    sortHomeProjectScopes({
-      scopes: projectScopes,
-      threads,
-      pendingTasks: [],
-      projectSortOrder: "updated_at",
-    }),
-  ).map((scope) => ({
+  const projectFilterOptions = pickableProjectGroups(projectScopes).map((scope) => ({
     key: scope.key,
     label: scope.title,
   }));
@@ -249,12 +261,23 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     loaded: shelfPreferencesLoaded,
     settledShelfExpanded,
     snoozedShelfExpanded,
-    workingShelfEnabled,
     workingShelfExpanded,
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
   } = useThreadListV2ShelfPreferences();
+  const grouping = useThreadListV2GroupingPreferences();
+  const workingShelfEnabled = grouping.workingShelfEnabled;
+  const [rawTriageFilter, setTriageFilter] = useState<SidebarTriageFilter>("all");
+  const triageFilter = grouping.groupMode === "flat" ? "all" : rawTriageFilter;
+  const [autoCollapseOpenedKeys, setAutoCollapseOpenedKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [organizeSheetOpen, setOrganizeSheetOpen] = useState(false);
+  const canOrganizeNoProject = useMemo(
+    () => projectScopes.some((scope) => !scope.isScratch && !scope.archived),
+    [projectScopes],
+  );
   const now = useThreadListNow(threads);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
@@ -274,6 +297,11 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const {
     layout: threadListV2Layout,
     items: threadListV2Items,
+    triageCounts,
+    projectFolderSummary,
+    statusGroupSummary,
+    shelfFolderKeys,
+    noProjectActiveThreads,
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
@@ -297,7 +325,28 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     snoozedShelfExpanded,
     settledShelfExpanded,
     selectedThreadKey,
+    groupMode: grouping.groupMode,
+    urgencyOrder: grouping.urgencyOrder,
+    autoCollapseDone: grouping.autoCollapseDone,
+    multilineRows: grouping.multilineRows,
+    triageFilter,
+    projectScopes,
+    collapsedProjectGroups: grouping.collapsedProjectGroups,
+    collapsedStatusGroups: grouping.collapsedStatusGroups,
+    collapsedShelfProjectGroups: grouping.collapsedShelfProjectGroups,
+    autoCollapseOpenedKeys,
+    canOrganizeNoProject,
   });
+  const { toggleProjectFolder, toggleStatusGroup, groupingMenuOptions } =
+    buildQueueGroupingHandlers({
+      grouping,
+      setTriageFilter,
+      autoCollapseOpenedKeys,
+      setAutoCollapseOpenedKeys,
+      projectFolderSummary,
+      statusGroupSummary,
+      shelfFolderKeys,
+    });
   const listItems: readonly SidebarListItem[] =
     settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0
       ? [
@@ -359,6 +408,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   // Recycle equality needs project/search data for titles and favicons; keep the minute clock on items to limit updates.
   const listExtraData = {
     activeNewTask,
+    groupMode: grouping.groupMode,
+    multilineRows: grouping.multilineRows,
     selectedThreadKey: selectedThreadKey ?? "",
     projectByKey,
     projectTitleByProjectKey,
@@ -413,6 +464,56 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           />
         );
       }
+      case "v2-pinned-strip":
+        return (
+          <ThreadListV2PinnedStrip
+            entries={item.entries}
+            count={item.count}
+            pane="sidebar"
+            selectedThreadKey={selectedThreadKey}
+            projectByKey={projectByKey}
+            settlementEnvironmentIds={settlementEnvironmentIds}
+            snoozeEnvironmentIds={snoozeEnvironmentIds}
+            snoozePresetsByEnvironmentId={snoozePresetsByEnvironmentId}
+            pinningEnvironmentIds={pinningEnvironmentIds}
+            onSelectThread={handleSelectThread}
+            onUnpinThread={unpinThread}
+            onSettleThread={settleThread}
+            onSnoozeThread={snoozeThread}
+            onRenameThread={renameThread}
+            onDeleteThread={confirmDeleteThread}
+          />
+        );
+      case "v2-project-folder":
+        return (
+          <ThreadListV2ProjectFolderHeader
+            item={item}
+            pane="sidebar"
+            onToggle={toggleProjectFolder}
+            onOrganize={() => setOrganizeSheetOpen(true)}
+            onNewThreadInProject={props.onNewThreadInProject}
+          />
+        );
+      case "v2-status-group":
+        return (
+          <ThreadListV2StatusGroupHeader item={item} pane="sidebar" onToggle={toggleStatusGroup} />
+        );
+      case "v2-shelf-project-folder":
+        return (
+          <ThreadListV2ShelfProjectHeader
+            item={item}
+            pane="sidebar"
+            onToggle={grouping.toggleShelfProjectFolder}
+          />
+        );
+      case "v2-triage-empty":
+        return (
+          <ThreadListV2TriageEmptyRow
+            item={item}
+            pane="sidebar"
+            onResetFilter={() => setTriageFilter("all")}
+          />
+        );
       case "v2-thread": {
         const thread = item.item.thread;
         const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
@@ -428,6 +529,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             snoozePresetMinute={item.snoozePresetMinute ?? ""}
             snoozeWakeLabelText={item.snoozeWakeLabelText}
             timeLabel={item.timeLabel}
+            hideProjectIcon={item.hideProjectIcon}
+            compactRow={item.compactRow}
+            indentedInFolder={item.indentedInFolder}
             project={projectByKey.get(scopeKey) ?? null}
             providerInstance={resolveProviderInstance(thread)}
             providers={providersByEnvironmentId.get(thread.environmentId)}
@@ -546,7 +650,10 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         accessibilityLabel: gt("Search threads"),
       }}
       filter={{
-        customized: options.selectedEnvironmentId !== null || selectedProjectKey !== null,
+        customized:
+          options.selectedEnvironmentId !== null ||
+          selectedProjectKey !== null ||
+          grouping.groupMode !== "project",
         items: buildHomeListFilterMenuItems(
           {
             environments,
@@ -555,6 +662,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             selectedProjectKey,
             onEnvironmentChange: setSelectedEnvironmentId,
             onProjectChange: setSelectedProjectKey,
+            grouping: groupingMenuOptions,
           },
           messages,
         ),
@@ -607,6 +715,16 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     </View>
   );
 
+  const triageBar = (
+    <ThreadListTriageBar
+      compact
+      visible={grouping.groupMode !== "flat" && props.searchQuery.trim().length === 0}
+      counts={triageCounts}
+      selected={triageFilter}
+      onSelect={setTriageFilter}
+    />
+  );
+
   if (Platform.OS === "ios") {
     return (
       <>
@@ -624,6 +742,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 getItemType={(item) => item.type}
                 itemsAreEqual={sidebarItemsAreEqual}
                 keyExtractor={(item) => item.key}
+                ListHeaderComponent={triageBar}
                 renderItem={renderListItem}
                 automaticallyAdjustsScrollIndicatorInsets
                 // The column lays the list under its bar, glass or solid; UIKit insets it past both.
@@ -648,6 +767,11 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           </SwipeableScrollGateProvider>
           <ThreadUndoNotice visible={props.visible} />
         </View>
+        <OrganizeNoProjectSheet
+          visible={organizeSheetOpen}
+          threads={noProjectActiveThreads}
+          onClose={() => setOrganizeSheetOpen(false)}
+        />
       </>
     );
   }
@@ -681,6 +805,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 getItemType={(item) => item.type}
                 itemsAreEqual={sidebarItemsAreEqual}
                 keyExtractor={(item) => item.key}
+                ListHeaderComponent={triageBar}
                 renderItem={renderListItem}
                 contentContainerStyle={{
                   paddingBottom: floatingTabsEnabled
@@ -703,6 +828,11 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       </View>
       {header}
       <ThreadUndoNotice visible={props.visible} />
+      <OrganizeNoProjectSheet
+        visible={organizeSheetOpen}
+        threads={noProjectActiveThreads}
+        onClose={() => setOrganizeSheetOpen(false)}
+      />
     </View>
   );
 }

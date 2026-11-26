@@ -13,7 +13,10 @@ import {
   type PendingThreadOrder,
   type ThreadMoveAvailability,
 } from "./threadOrder";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import {
   CommandId,
@@ -35,6 +38,8 @@ import { threadJumpTarget } from "../keyboard/threadKeyboardShortcuts";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
+  buildThreadListV2ListState,
+  classifyThreadListV2Triage,
   getThreadListV2OrderedSection,
   layoutThreadListV2RowMenuActions,
   resolveThreadListV2SnoozeMenuSelection,
@@ -47,6 +52,7 @@ import {
   threadListV2RowAccessibilityLabel,
   threadHasUnseenCompletion,
   type ThreadListV2ListItem,
+  type ThreadListV2ProjectFolderScope,
 } from "./threadListV2";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -1922,5 +1928,352 @@ describe("queued messages keep a settled thread active", () => {
       ["settled", "slim"],
     ]);
     expect(layout.settledCount).toBe(1);
+  });
+});
+
+describe("mobile queue grouping and triage", () => {
+  function makeScope(
+    id: string,
+    title: string,
+    options?: { readonly isScratch?: boolean },
+  ): ThreadListV2ProjectFolderScope {
+    const projectId = ProjectId.make(id);
+    const project: EnvironmentProject = {
+      id: projectId,
+      environmentId,
+      title,
+      workspaceRoot: `/workspaces/${id}`,
+      repositoryIdentity: null,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      ...(options?.isScratch ? { isScratch: true } : {}),
+    };
+    return {
+      key: `${environmentId}:${id}`,
+      title,
+      representative: project,
+      projectRefs: [{ environmentId, projectId }],
+      isScratch: options?.isScratch === true,
+      pinned: false,
+      archived: false,
+    };
+  }
+
+  const runningRuntime: EnvironmentThreadShell["runtime"] = {
+    status: "running",
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: "Codex",
+    lastError: null,
+    updatedAt: NOW,
+  };
+  const failedRuntime: EnvironmentThreadShell["runtime"] = {
+    status: "failed",
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: "Codex",
+    lastError: "boom",
+    lastErrorClass: "unknown",
+    updatedAt: NOW,
+  };
+
+  it("classifies thread triage for approvals, unseen failures, woke, done, and idle", () => {
+    const approval = makeThread({
+      id: ThreadId.make("approval"),
+      title: "Approval",
+      hasPendingApprovals: true,
+    });
+    expect(classifyThreadListV2Triage(approval, NOW)).toMatchObject({
+      isAttention: true,
+      urgencyTier: 4,
+    });
+
+    const failed = makeThread({
+      id: ThreadId.make("failed"),
+      title: "Failed",
+      runtime: failedRuntime,
+      lastVisitedAt: "2026-06-01T00:00:00.000Z",
+      latestRun: {
+        runId: RunId.make("run-fail"),
+        status: "failed",
+        requestedAt: "2026-06-01T23:00:00.000Z",
+        startedAt: "2026-06-01T23:00:00.000Z",
+        completedAt: "2026-06-01T23:05:00.000Z",
+        assistantMessageId: null,
+      },
+    });
+    expect(classifyThreadListV2Triage(failed, NOW)).toMatchObject({
+      isFailed: true,
+      isAttention: true,
+      urgencyTier: 3,
+    });
+
+    const done = makeThread({
+      id: ThreadId.make("done"),
+      title: "Done",
+      lastVisitedAt: "2026-06-01T00:00:00.000Z",
+      latestRun: {
+        runId: RunId.make("run-ok"),
+        status: "completed",
+        requestedAt: "2026-06-01T23:00:00.000Z",
+        startedAt: "2026-06-01T23:00:00.000Z",
+        completedAt: "2026-06-01T23:05:00.000Z",
+        assistantMessageId: null,
+      },
+    });
+    expect(classifyThreadListV2Triage(done, NOW)).toMatchObject({
+      isDone: true,
+      isAttention: false,
+      urgencyTier: 1,
+    });
+
+    const idle = makeThread({ id: ThreadId.make("idle"), title: "Idle" });
+    expect(classifyThreadListV2Triage(idle, NOW)).toMatchObject({
+      isDone: false,
+      isAttention: false,
+      urgencyTier: 2,
+    });
+  });
+
+  it("groups active threads by project with pinned strip, urgency sort, rollups, auto-collapse, and shelf sub-folders", () => {
+    const scopeAlpha = makeScope("alpha", "Alpha");
+    const scopeBeta = makeScope("beta", "Beta");
+    const scopeScratch = makeScope("scratch", "No project", { isScratch: true });
+    const scopes = [scopeAlpha, scopeBeta, scopeScratch];
+
+    const threads = [
+      makeThread({
+        id: ThreadId.make("pinned-1"),
+        title: "Pinned",
+        projectId: ProjectId.make("alpha"),
+        pinnedAt: "2026-06-01T01:00:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("alpha-done"),
+        title: "Alpha Done",
+        projectId: ProjectId.make("alpha"),
+        lastVisitedAt: "2026-06-01T00:00:00.000Z",
+        latestRun: {
+          runId: RunId.make("run-alpha"),
+          status: "completed",
+          requestedAt: "2026-06-01T23:00:00.000Z",
+          startedAt: "2026-06-01T23:00:00.000Z",
+          completedAt: "2026-06-01T23:05:00.000Z",
+          assistantMessageId: null,
+        },
+      }),
+      makeThread({
+        id: ThreadId.make("beta-attn"),
+        title: "Beta Approval",
+        projectId: ProjectId.make("beta"),
+        hasPendingApprovals: true,
+      }),
+      makeThread({
+        id: ThreadId.make("scratch-idle"),
+        title: "Scratch Note",
+        projectId: ProjectId.make("scratch"),
+      }),
+      makeThread({
+        id: ThreadId.make("working-beta"),
+        title: "Working Beta",
+        projectId: ProjectId.make("beta"),
+        runtime: runningRuntime,
+      }),
+      makeThread({
+        id: ThreadId.make("settled-alpha"),
+        title: "Settled Alpha",
+        projectId: ProjectId.make("alpha"),
+        settledOverride: "settled",
+        settledAt: "2026-06-01T12:00:00.000Z",
+      }),
+    ];
+
+    const layout = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      workingShelfEnabled: true,
+      workingShelfExpanded: true,
+      settledShelfExpanded: true,
+    });
+
+    const state = buildThreadListV2ListState({
+      items: layout.items,
+      pendingTasks: [],
+      workingCount: layout.workingCount,
+      workingShelfExpanded: true,
+      workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
+      settledCount: layout.settledCount,
+      settledShelfExpanded: true,
+      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+      snoozeLabelNow: NOW,
+      groupMode: "project",
+      urgencyOrder: true,
+      autoCollapseDone: true,
+      multilineRows: false,
+      triageFilter: "all",
+      projectScopes: scopes,
+      canOrganizeNoProject: true,
+    });
+
+    expect(state.summary.triageCounts).toEqual({
+      all: 3,
+      attention: 1,
+      done: 1,
+      noProject: 1,
+    });
+    expect(state.summary.noProjectActiveThreads.map((t) => t.id)).toEqual(["scratch-idle"]);
+    expect(state.items.map((item) => item.type)).toEqual([
+      "v2-pinned-strip",
+      "v2-project-folder", // Beta (tier 4 attention floats first)
+      "v2-thread",
+      "v2-project-folder", // Alpha (done-only, auto-collapsed!)
+      "v2-project-folder", // No project (pinned to bottom, not done-only so expanded)
+      "v2-thread",
+      "v2-working-shelf",
+      "v2-shelf-project-folder",
+      "v2-thread",
+      "v2-settled-shelf",
+      "v2-shelf-project-folder",
+      "v2-thread",
+    ]);
+
+    const betaFolder = state.items[1]!;
+    expect(betaFolder).toMatchObject({
+      type: "v2-project-folder",
+      projectKey: `${environmentId}:beta`,
+      collapsed: false,
+      doneOnly: false,
+      totalCount: 1,
+      rollup: { attention: 1, failed: 0, working: 0, done: 0 },
+    });
+    const betaThreadRow = state.items[2]!;
+    expect(betaThreadRow).toMatchObject({
+      type: "v2-thread",
+      hideProjectIcon: true,
+      compactRow: true,
+      indentedInFolder: true,
+    });
+    const alphaFolder = state.items[3]!;
+    expect(alphaFolder).toMatchObject({
+      type: "v2-project-folder",
+      projectKey: `${environmentId}:alpha`,
+      collapsed: true,
+      doneOnly: true,
+      rollup: { attention: 0, failed: 0, working: 0, done: 1 },
+    });
+    const scratchFolder = state.items[4]!;
+    expect(scratchFolder).toMatchObject({
+      type: "v2-project-folder",
+      isScratch: true,
+      canOrganize: true,
+    });
+    expect(threadJumpTarget(state.items, "thread.jump.1")).toMatchObject({
+      type: "v2-thread",
+      item: { thread: { id: "pinned-1" } },
+    });
+
+    // Opening Alpha explicitly keeps it expanded despite autoCollapseDone.
+    const openedState = buildThreadListV2ListState({
+      items: layout.items,
+      pendingTasks: [],
+      groupMode: "project",
+      autoCollapseDone: true,
+      multilineRows: false,
+      projectScopes: scopes,
+      autoCollapseOpenedKeys: new Set([`${environmentId}:alpha`]),
+    });
+    expect(
+      openedState.items.find(
+        (item) => item.type === "v2-project-folder" && item.projectKey === `${environmentId}:alpha`,
+      ),
+    ).toMatchObject({ collapsed: false });
+  });
+
+  it("supports By status mode, triage filtering with empty state, shelf collapse, search bypass, and item equality", () => {
+    const scopeAlpha = makeScope("alpha", "Alpha");
+    const scopeScratch = makeScope("scratch", "No project", { isScratch: true });
+    const scopes = [scopeAlpha, scopeScratch];
+
+    const threads = [
+      makeThread({
+        id: ThreadId.make("attn"),
+        title: "Needs Approval",
+        projectId: ProjectId.make("alpha"),
+        hasPendingApprovals: true,
+      }),
+      makeThread({
+        id: ThreadId.make("idle"),
+        title: "Idle Note",
+        projectId: ProjectId.make("scratch"),
+      }),
+    ];
+    const layout = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    const statusItems = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      groupMode: "status",
+      multilineRows: false,
+      projectScopes: scopes,
+    });
+    expect(
+      statusItems.map((item) =>
+        item.type === "v2-status-group"
+          ? `status:${item.bucketKey}`
+          : item.type === "v2-thread"
+            ? `${item.item.thread.id}:hideIcon=${String(item.hideProjectIcon)}`
+            : item.type,
+      ),
+    ).toEqual(["status:attention", "attn:hideIcon=false", "status:active", "idle:hideIcon=false"]);
+
+    const emptyTriage = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      groupMode: "project",
+      triageFilter: "done",
+      projectScopes: scopes,
+    });
+    expect(emptyTriage).toEqual([
+      {
+        type: "v2-triage-empty",
+        key: "v2:triage-empty",
+        filter: "done",
+      },
+    ]);
+
+    const searchBypass = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      groupMode: "project",
+      triageFilter: "done",
+      searchActive: true,
+      projectScopes: scopes,
+    });
+    expect(searchBypass.map((item) => item.type)).toEqual(["v2-thread", "v2-thread"]);
+
+    const folderA = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      groupMode: "project",
+      projectScopes: scopes,
+    })[0]!;
+    const folderB = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      groupMode: "project",
+      projectScopes: scopes,
+      collapsedProjectGroups: new Set([`${environmentId}:alpha`]),
+    })[0]!;
+    expect(threadListV2ListItemsAreEqual(folderA, folderA)).toBe(true);
+    expect(threadListV2ListItemsAreEqual(folderA, folderB)).toBe(false);
   });
 });

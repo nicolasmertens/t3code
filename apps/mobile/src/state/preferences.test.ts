@@ -233,4 +233,59 @@ describe("mobile preferences state", () => {
       registry.dispose();
     }),
   );
+
+  it.effect("persists and updates thread list grouping preferences", () =>
+    Effect.gen(function* () {
+      let persisted: MobilePreferences.Preferences = {};
+      const state = makePreferencesState({
+        load: Effect.succeed(persisted),
+        savePatch: (patch) =>
+          Effect.sync(() => {
+            persisted = { ...persisted, ...patch };
+            return persisted;
+          }),
+      });
+      const registry = AtomRegistry.make();
+      const unmount = registry.mount(state.preferencesAtom);
+      yield* AtomRegistry.getResult(registry, state.preferencesAtom, { suspendOnWaiting: true });
+
+      function useSavePreferences() {
+        return useAtomCommand(state.savePreferences, { reportFailure: false });
+      }
+      const setters: Array<ReturnType<typeof useSavePreferences>> = [];
+      function CaptureSetter() {
+        setters.push(useSavePreferences());
+        return null;
+      }
+      renderToString(
+        createElement(RegistryContext.Provider, { value: registry }, createElement(CaptureSetter)),
+      );
+      const savePreferences = setters[0]!;
+
+      yield* Effect.promise(() =>
+        savePreferences({
+          threadListGroupMode: "status",
+          threadListUrgencyOrder: false,
+          threadListAutoCollapseDone: true,
+          threadListMultilineRows: true,
+          collapsedStatusGroups: ["done"],
+          collapsedShelfProjectGroups: ["working:proj-a"],
+          sidebarQueuePreferencesSyncedAt: "2026-11-26T12:00:00.000Z",
+        }),
+      );
+
+      expect(AsyncResult.getOrElse(registry.get(state.preferencesAtom), () => ({}))).toEqual({
+        threadListGroupMode: "status",
+        threadListUrgencyOrder: false,
+        threadListAutoCollapseDone: true,
+        threadListMultilineRows: true,
+        collapsedStatusGroups: ["done"],
+        collapsedShelfProjectGroups: ["working:proj-a"],
+        sidebarQueuePreferencesSyncedAt: "2026-11-26T12:00:00.000Z",
+      });
+
+      unmount();
+      registry.dispose();
+    }),
+  );
 });

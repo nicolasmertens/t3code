@@ -387,6 +387,10 @@
       "types": "./src/state/sharedSettings.ts",
       "default": "./src/state/sharedSettings.ts"
     },
+    "./state/sidebar-grouping": {
+      "types": "./src/state/sidebarGrouping.ts",
+      "default": "./src/state/sidebarGrouping.ts"
+    },
     "./state/shell": {
       "types": "./src/state/shell.ts",
       "default": "./src/state/shell.ts"

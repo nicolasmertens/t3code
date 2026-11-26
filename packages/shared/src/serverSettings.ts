@@ -409,6 +409,7 @@ export function applyServerSettingsPatch(
     usageModelAliases: usageModelAliasesPatch,
     // Entry replacement: deepMerge would keep keys the client meant to clear.
     projectSettingsOverrides: projectSettingsOverridesPatch,
+    sidebarQueuePreferences: sidebarQueuePreferencesPatch,
     projectAgentBrowserAccessOverrides: _legacyBrowserAccess,
     projectAutoPullOverrides: _legacyAutoPull,
     projectScriptOverrides: _legacyScripts,
@@ -611,6 +612,14 @@ export function applyServerSettingsPatch(
       : {}),
     ...(patch.defaultProjectScripts !== undefined
       ? { defaultProjectScripts: patch.defaultProjectScripts }
+      : {}),
+    ...(sidebarQueuePreferencesPatch !== undefined
+      ? {
+          sidebarQueuePreferences: {
+            ...current.sidebarQueuePreferences,
+            ...sidebarQueuePreferencesPatch,
+          },
+        }
       : {}),
     ...(usageLimitSourcesPatch !== undefined
       ? {

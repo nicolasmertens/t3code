@@ -1095,3 +1095,34 @@ describe("resolveSpeechPostProcessingModelSelection", () => {
     ).toBeNull();
   });
 });
+
+describe("sidebarQueuePreferences patching", () => {
+  it("merges partial updates and allows setting groupMode back to null", () => {
+    const first = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      sidebarQueuePreferences: {
+        groupMode: "project",
+        urgencyOrder: true,
+        updatedAt: "2026-11-26T12:00:00.000Z",
+      },
+    });
+    expect(first.sidebarQueuePreferences).toEqual({
+      groupMode: "project",
+      urgencyOrder: true,
+      updatedAt: "2026-11-26T12:00:00.000Z",
+    });
+
+    const cleared = applyServerSettingsPatch(first, {
+      sidebarQueuePreferences: {
+        groupMode: null,
+        autoCollapseDone: true,
+        updatedAt: "2026-11-26T12:01:00.000Z",
+      },
+    });
+    expect(cleared.sidebarQueuePreferences).toEqual({
+      groupMode: null,
+      urgencyOrder: true,
+      autoCollapseDone: true,
+      updatedAt: "2026-11-26T12:01:00.000Z",
+    });
+  });
+});

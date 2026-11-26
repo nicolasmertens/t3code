@@ -40,6 +40,7 @@ import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { WorkspaceListEmptyDetail } from "../layout/workspace/WorkspaceListEmptyDetail";
 import { WorkspaceListHeader } from "../layout/workspace/WorkspaceListHeader";
+import { useThreadListV2GroupingPreferences } from "../threads/use-thread-list-v2-grouping-preferences";
 import { buildHomeListFilterMenuItems, homeListFilterEnvironments } from "./home-list-filter-menu";
 
 export function HomeRouteScreen() {
@@ -149,6 +150,7 @@ export function HomeRouteScreen() {
   );
   const selectedProjectKey =
     resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
+  const grouping = useThreadListV2GroupingPreferences();
 
   if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
@@ -173,7 +175,10 @@ export function HomeRouteScreen() {
             accessibilityLabel: gt("Search threads"),
           }}
           filter={{
-            customized: selectedEnvironmentId !== null || selectedProjectKey !== null,
+            customized:
+              selectedEnvironmentId !== null ||
+              selectedProjectKey !== null ||
+              grouping.groupMode !== "project",
             items: buildHomeListFilterMenuItems(
               {
                 environments,
@@ -182,6 +187,19 @@ export function HomeRouteScreen() {
                 selectedProjectKey,
                 onEnvironmentChange: setSelectedEnvironmentId,
                 onProjectChange: setSelectedProjectKey,
+                grouping: {
+                  groupMode: grouping.groupMode,
+                  urgencyOrder: grouping.urgencyOrder,
+                  autoCollapseDone: grouping.autoCollapseDone,
+                  multilineRows: grouping.multilineRows,
+                  workingShelfEnabled: grouping.workingShelfEnabled,
+                  onGroupModeChange: grouping.setGroupMode,
+                  onUrgencyOrderChange: grouping.setUrgencyOrder,
+                  onAutoCollapseDoneChange: grouping.setAutoCollapseDone,
+                  onMultilineRowsChange: grouping.setMultilineRows,
+                  onWorkingShelfEnabledChange: grouping.setWorkingShelfEnabled,
+                  onExpandAllGroups: grouping.clearAllCollapsedGroups,
+                },
               },
               m,
             ),

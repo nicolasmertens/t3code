@@ -1,8 +1,10 @@
 import { Debouncer } from "@tanstack/react-pacer";
-import { PullRequestMergeMethod } from "@t3tools/contracts";
+import { PullRequestMergeMethod, type SidebarQueueGroupMode } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
+
+export type { SidebarQueueGroupMode };
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -18,8 +20,6 @@ const LEGACY_PERSISTED_STATE_KEYS = [
   "codething:renderer-state:v1",
 ] as const;
 
-export type SidebarQueueGroupMode = "flat" | "project" | "status";
-
 export interface PersistedUiState {
   projectExpandedById?: Record<string, boolean>;
   projectOrder?: string[];
@@ -33,6 +33,7 @@ export interface PersistedUiState {
   sidebarGroupMode?: SidebarQueueGroupMode | null;
   sidebarUrgencyOrder?: boolean;
   sidebarAutoCollapseDone?: boolean;
+  sidebarQueuePreferencesSyncedAt?: string | null;
   sidebarStatusGroupExpandedById?: Record<string, boolean>;
   sidebarShelfFolderExpandedById?: Record<string, boolean>;
   pullRequestMergeMethod?: string;
@@ -45,6 +46,7 @@ export interface UiProjectState {
   sidebarGroupMode: SidebarQueueGroupMode | null;
   sidebarUrgencyOrder: boolean;
   sidebarAutoCollapseDone: boolean;
+  sidebarQueuePreferencesSyncedAt: string | null;
   sidebarStatusGroupExpandedById: Record<string, boolean>;
   sidebarShelfFolderExpandedById: Record<string, boolean>;
 }
@@ -71,6 +73,7 @@ const initialState: UiState = {
   sidebarGroupMode: null,
   sidebarUrgencyOrder: true,
   sidebarAutoCollapseDone: false,
+  sidebarQueuePreferencesSyncedAt: null,
   sidebarStatusGroupExpandedById: {},
   sidebarShelfFolderExpandedById: {},
   threadLastVisitedAtById: {},
@@ -174,6 +177,7 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
       typeof parsed.sidebarAutoCollapseDone === "boolean"
         ? parsed.sidebarAutoCollapseDone
         : initialState.sidebarAutoCollapseDone,
+    sidebarQueuePreferencesSyncedAt: sanitizeOptionalKey(parsed.sidebarQueuePreferencesSyncedAt),
     sidebarStatusGroupExpandedById: sanitizeBooleanRecord(parsed.sidebarStatusGroupExpandedById),
     sidebarShelfFolderExpandedById: sanitizeBooleanRecord(parsed.sidebarShelfFolderExpandedById),
     pullRequestMergeMethod: isPullRequestMergeMethod(parsed.pullRequestMergeMethod)
@@ -225,6 +229,7 @@ export function persistState(state: UiState): void {
         sidebarGroupMode: state.sidebarGroupMode,
         sidebarUrgencyOrder: state.sidebarUrgencyOrder,
         sidebarAutoCollapseDone: state.sidebarAutoCollapseDone,
+        sidebarQueuePreferencesSyncedAt: state.sidebarQueuePreferencesSyncedAt,
         sidebarStatusGroupExpandedById: state.sidebarStatusGroupExpandedById,
         sidebarShelfFolderExpandedById: state.sidebarShelfFolderExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
@@ -411,6 +416,12 @@ function setSidebarAutoCollapseDone(state: UiState, enabled: boolean): UiState {
     : { ...state, sidebarAutoCollapseDone: enabled };
 }
 
+function setSidebarQueuePreferencesSyncedAt(state: UiState, syncedAt: string | null): UiState {
+  return state.sidebarQueuePreferencesSyncedAt === syncedAt
+    ? state
+    : { ...state, sidebarQueuePreferencesSyncedAt: syncedAt };
+}
+
 function setStatusGroupExpanded(state: UiState, statusKey: string, expanded: boolean): UiState {
   if (state.sidebarStatusGroupExpandedById[statusKey] === expanded) {
     return state;
@@ -492,6 +503,7 @@ interface UiStateStore extends UiState {
   setSidebarGroupMode: (mode: SidebarQueueGroupMode | null) => void;
   setSidebarUrgencyOrder: (enabled: boolean) => void;
   setSidebarAutoCollapseDone: (enabled: boolean) => void;
+  setSidebarQueuePreferencesSyncedAt: (syncedAt: string | null) => void;
   setStatusGroupExpanded: (statusKey: string, expanded: boolean) => void;
   setStatusGroupsExpandedBatch: (entries: ReadonlyArray<readonly [string, boolean]>) => void;
   setShelfFolderExpanded: (folderKey: string, expanded: boolean) => void;
@@ -520,6 +532,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   setSidebarUrgencyOrder: (enabled) => set((state) => setSidebarUrgencyOrder(state, enabled)),
   setSidebarAutoCollapseDone: (enabled) =>
     set((state) => setSidebarAutoCollapseDone(state, enabled)),
+  setSidebarQueuePreferencesSyncedAt: (syncedAt) =>
+    set((state) => setSidebarQueuePreferencesSyncedAt(state, syncedAt)),
   setStatusGroupExpanded: (statusKey, expanded) =>
     set((state) => setStatusGroupExpanded(state, statusKey, expanded)),
   setStatusGroupsExpandedBatch: (entries) =>

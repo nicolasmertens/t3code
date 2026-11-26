@@ -87,6 +87,18 @@ export const SidebarProjectGroupingMode = Schema.Literals([
 ]);
 export type SidebarProjectGroupingMode = typeof SidebarProjectGroupingMode.Type;
 const DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE: SidebarProjectGroupingMode = "repository";
+
+export const SidebarQueueGroupMode = Schema.Literals(["flat", "project", "status"]);
+export type SidebarQueueGroupMode = typeof SidebarQueueGroupMode.Type;
+
+export const SidebarQueuePreferences = Schema.Struct({
+  groupMode: Schema.optionalKey(Schema.NullOr(SidebarQueueGroupMode)),
+  urgencyOrder: Schema.optionalKey(Schema.Boolean),
+  autoCollapseDone: Schema.optionalKey(Schema.Boolean),
+  workingShelfEnabled: Schema.optionalKey(Schema.Boolean),
+  updatedAt: Schema.optionalKey(Schema.String),
+});
+export type SidebarQueuePreferences = typeof SidebarQueuePreferences.Type;
 export const MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 1;
 export const MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 90;
 export const SidebarAutoSettleAfterDays = Schema.Number.check(
@@ -1473,6 +1485,9 @@ export const ServerSettings = Schema.Struct({
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
+  sidebarQueuePreferences: SidebarQueuePreferences.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   compactIdleThreads: LegacyCompactIdleThreads.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1929,6 +1944,7 @@ export const ServerSettingsPatch = Schema.Struct({
   simlockDeviceHosts: Schema.optionalKey(SimlockDeviceHostConfigs),
   simlockDeviceHostsEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
+  sidebarQueuePreferences: Schema.optionalKey(SidebarQueuePreferences),
   compactIdleThreads: Schema.optionalKey(LegacyCompactIdleThreads),
   idleCompaction: Schema.optionalKey(IdleCompactionMode),
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),

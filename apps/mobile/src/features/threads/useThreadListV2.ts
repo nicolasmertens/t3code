@@ -1,5 +1,6 @@
 import type { OlderSettledScope } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { SidebarTriageFilter } from "@t3tools/client-runtime/state/sidebar-grouping";
+import type { EnvironmentId, SidebarQueueGroupMode } from "@t3tools/contracts";
 import { useMemo, useSyncExternalStore } from "react";
 
 import { keepMarked } from "../../i18n/messages";
@@ -8,10 +9,11 @@ import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/ol
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   buildThreadListV2Items,
-  buildThreadListV2ListItems,
+  buildThreadListV2ListState,
   getThreadListV2OrderedSection,
   threadListInboxReturns,
   threadListV2LayoutTime,
+  type ThreadListV2ProjectFolderScope,
 } from "./threadListV2";
 import { computeThreadMoveAvailability } from "./threadOrder";
 
@@ -66,6 +68,17 @@ export function useThreadListV2(input: {
   readonly snoozedShelfExpanded: boolean;
   readonly settledShelfExpanded: boolean;
   readonly selectedThreadKey: string | null;
+  readonly groupMode?: SidebarQueueGroupMode;
+  readonly urgencyOrder?: boolean;
+  readonly autoCollapseDone?: boolean;
+  readonly multilineRows?: boolean;
+  readonly triageFilter?: SidebarTriageFilter;
+  readonly projectScopes?: ReadonlyArray<ThreadListV2ProjectFolderScope>;
+  readonly collapsedProjectGroups?: ReadonlySet<string>;
+  readonly collapsedStatusGroups?: ReadonlySet<string>;
+  readonly collapsedShelfProjectGroups?: ReadonlySet<string>;
+  readonly autoCollapseOpenedKeys?: ReadonlySet<string>;
+  readonly canOrganizeNoProject?: boolean;
 }) {
   const { threads, workingShelfEnabled } = input;
   const layoutTime = useMemo(
@@ -210,9 +223,9 @@ export function useThreadListV2(input: {
         (searchQuery.length === 0 || pendingTask.title.toLocaleLowerCase().includes(searchQuery)),
     );
   }, [input.projectRefs, input.searchQuery, input.pendingTasks, input.environmentId]);
-  const items = useMemo(
+  const listState = useMemo(
     () =>
-      buildThreadListV2ListItems({
+      buildThreadListV2ListState({
         items: layout.items,
         pendingTasks,
         workingCount: layout.workingCount,
@@ -229,6 +242,18 @@ export function useThreadListV2(input: {
         queuedThreadKeys: input.queuedThreadKeys,
         moveAvailability,
         shelfPreferencesLoading: !input.shelfPreferencesLoaded,
+        groupMode: input.groupMode,
+        urgencyOrder: input.urgencyOrder,
+        autoCollapseDone: input.autoCollapseDone,
+        multilineRows: input.multilineRows,
+        triageFilter: input.triageFilter,
+        projectScopes: input.projectScopes,
+        collapsedProjectGroups: input.collapsedProjectGroups,
+        collapsedStatusGroups: input.collapsedStatusGroups,
+        collapsedShelfProjectGroups: input.collapsedShelfProjectGroups,
+        autoCollapseOpenedKeys: input.autoCollapseOpenedKeys,
+        canOrganizeNoProject: input.canOrganizeNoProject,
+        searchActive: input.searchQuery.trim().length > 0,
         resolve: keepMarked,
       }),
     [
@@ -242,9 +267,27 @@ export function useThreadListV2(input: {
       input.queuedThreadKeys,
       moveAvailability,
       input.shelfPreferencesLoaded,
+      input.groupMode,
+      input.urgencyOrder,
+      input.autoCollapseDone,
+      input.multilineRows,
+      input.triageFilter,
+      input.projectScopes,
+      input.collapsedProjectGroups,
+      input.collapsedStatusGroups,
+      input.collapsedShelfProjectGroups,
+      input.autoCollapseOpenedKeys,
+      input.canOrganizeNoProject,
+      input.searchQuery,
     ],
   );
-  return { layout, items, contentOnlyThreadKeys, olderSettledShelf };
+  return {
+    layout,
+    items: listState.items,
+    ...listState.summary,
+    contentOnlyThreadKeys,
+    olderSettledShelf,
+  };
 }
 
 /** The list's scope per environment: its projects there, or every project. */

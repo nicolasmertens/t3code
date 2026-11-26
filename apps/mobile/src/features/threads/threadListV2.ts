@@ -13,7 +13,27 @@ import {
   hasUnseenRunFailure,
   type SnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
+import {
+  buildScratchProjectKeySet,
+  computeSidebarGroupRollupWith,
+  countTriageBucketsWith,
+  deriveSidebarThreadTriage,
+  filterThreadsByTriageWith,
+  groupShelfThreadsByProject,
+  groupThreadsByStatusWith,
+  isSidebarGroupDoneOnlyWith,
+  sidebarShelfFolderStateKey,
+  sortProjectFoldersByUrgencyWith,
+  type SidebarGroupRollup,
+  type SidebarShelfKey,
+  type SidebarStatusBucketKey,
+  type SidebarThreadTriage,
+  type SidebarTriageFilter,
+} from "@t3tools/client-runtime/state/sidebar-grouping";
 import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
 import {
   threadSearchMatchKey,
@@ -33,7 +53,13 @@ import {
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "@t3tools/client-runtime/state/thread-sort";
-import { isListedThreadLineage, type EnvironmentId, type ProjectId } from "@t3tools/contracts";
+import {
+  isListedThreadLineage,
+  type EnvironmentId,
+  type ProjectId,
+  type ScopedProjectRef,
+  type SidebarQueueGroupMode,
+} from "@t3tools/contracts";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import type { MenuAction } from "@react-native-menu/menu";
 
@@ -353,6 +379,19 @@ export function resolveThreadListV2RowStatus(
   return hasUnseenRunFailure(thread) ? status : "ready";
 }
 
+export function classifyThreadListV2Triage(
+  thread: EnvironmentThreadShell,
+  now: string,
+  wokeAt?: string | null,
+): SidebarThreadTriage {
+  const resolvedWokeAt = wokeAt !== undefined ? wokeAt : resolveThreadListV2WokeAt(thread, { now });
+  return deriveSidebarThreadTriage({
+    status: resolveThreadListV2RowStatus(thread),
+    isWoke: resolvedWokeAt !== null,
+    hasUnseenCompletion: threadHasUnseenCompletion(thread),
+  });
+}
+
 function parseTimestampMs(isoDate: string): number {
   const parsed = Date.parse(isoDate);
   return Number.isNaN(parsed) ? 0 : parsed;
@@ -434,6 +473,16 @@ export interface ThreadListV2Layout {
   readonly contentOnlyThreadKeys: ReadonlySet<string>;
 }
 
+export interface ThreadListV2ProjectFolderScope {
+  readonly key: string;
+  readonly title: string;
+  readonly representative: EnvironmentProject;
+  readonly projectRefs: ReadonlyArray<ScopedProjectRef>;
+  readonly isScratch: boolean;
+  readonly pinned: boolean;
+  readonly archived: boolean;
+}
+
 export interface ThreadListV2ThreadListItem {
   readonly type: "v2-thread";
   readonly key: string;
@@ -446,6 +495,59 @@ export interface ThreadListV2ThreadListItem {
   readonly hasQueuedMessages: boolean;
   readonly canMoveUp: boolean;
   readonly canMoveDown: boolean;
+  readonly hideProjectIcon?: boolean;
+  readonly compactRow?: boolean;
+  readonly indentedInFolder?: boolean;
+}
+
+export interface ThreadListV2PinnedStripListItem {
+  readonly type: "v2-pinned-strip";
+  readonly key: "v2:pinned-strip";
+  readonly entries: ReadonlyArray<ThreadListV2ThreadListItem>;
+  readonly count: number;
+}
+
+export interface ThreadListV2ProjectFolderListItem {
+  readonly type: "v2-project-folder";
+  readonly key: string;
+  readonly projectKey: string;
+  readonly title: string;
+  readonly representative: EnvironmentProject;
+  readonly isScratch: boolean;
+  readonly collapsed: boolean;
+  readonly doneOnly: boolean;
+  readonly totalCount: number;
+  readonly rollup: SidebarGroupRollup;
+  readonly canOrganize: boolean;
+}
+
+export interface ThreadListV2StatusGroupListItem {
+  readonly type: "v2-status-group";
+  readonly key: string;
+  readonly bucketKey: SidebarStatusBucketKey;
+  readonly collapsed: boolean;
+  readonly doneOnly: boolean;
+  readonly totalCount: number;
+  readonly rollup: SidebarGroupRollup;
+}
+
+export interface ThreadListV2ShelfProjectFolderListItem {
+  readonly type: "v2-shelf-project-folder";
+  readonly key: string;
+  readonly shelf: SidebarShelfKey;
+  readonly projectKey: string;
+  readonly stateKey: string;
+  readonly title: string;
+  readonly representative: EnvironmentProject;
+  readonly isScratch: boolean;
+  readonly collapsed: boolean;
+  readonly totalCount: number;
+}
+
+export interface ThreadListV2TriageEmptyListItem {
+  readonly type: "v2-triage-empty";
+  readonly key: "v2:triage-empty";
+  readonly filter: Exclude<SidebarTriageFilter, "all">;
 }
 
 export interface ThreadListV2PendingListItem {
@@ -483,6 +585,11 @@ export interface ThreadListV2SettledShelfListItem {
 
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
+  | ThreadListV2PinnedStripListItem
+  | ThreadListV2ProjectFolderListItem
+  | ThreadListV2StatusGroupListItem
+  | ThreadListV2ShelfProjectFolderListItem
+  | ThreadListV2TriageEmptyListItem
   | ThreadListV2PendingListItem
   | ThreadListV2WorkingShelfListItem
   | ThreadListV2SnoozedShelfListItem
@@ -493,10 +600,24 @@ export function isThreadListV2ListItem(value: {
 }): value is ThreadListV2ListItem {
   return (
     value.type === "v2-thread" ||
+    value.type === "v2-pinned-strip" ||
+    value.type === "v2-project-folder" ||
+    value.type === "v2-status-group" ||
+    value.type === "v2-shelf-project-folder" ||
+    value.type === "v2-triage-empty" ||
     value.type === "v2-pending" ||
     value.type === "v2-working-shelf" ||
     value.type === "v2-snoozed-shelf" ||
     value.type === "v2-settled-shelf"
+  );
+}
+
+function rollupsEqual(left: SidebarGroupRollup, right: SidebarGroupRollup): boolean {
+  return (
+    left.attention === right.attention &&
+    left.failed === right.failed &&
+    left.working === right.working &&
+    left.done === right.done
   );
 }
 
@@ -521,8 +642,60 @@ export function threadListV2ListItemsAreEqual(
         previous.showTrailingDivider === item.showTrailingDivider &&
         previous.hasQueuedMessages === item.hasQueuedMessages &&
         previous.canMoveUp === item.canMoveUp &&
-        previous.canMoveDown === item.canMoveDown
+        previous.canMoveDown === item.canMoveDown &&
+        Boolean(previous.hideProjectIcon) === Boolean(item.hideProjectIcon) &&
+        Boolean(previous.compactRow) === Boolean(item.compactRow) &&
+        Boolean(previous.indentedInFolder) === Boolean(item.indentedInFolder)
       );
+    case "v2-pinned-strip":
+      return (
+        previous.type === "v2-pinned-strip" &&
+        previous.count === item.count &&
+        previous.entries.length === item.entries.length &&
+        item.entries.every((entry, index) => {
+          const prevEntry = previous.entries[index];
+          return prevEntry !== undefined && threadListV2ListItemsAreEqual(prevEntry, entry);
+        })
+      );
+    case "v2-project-folder":
+      return (
+        previous.type === "v2-project-folder" &&
+        previous.key === item.key &&
+        previous.projectKey === item.projectKey &&
+        previous.title === item.title &&
+        previous.representative === item.representative &&
+        previous.isScratch === item.isScratch &&
+        previous.collapsed === item.collapsed &&
+        previous.doneOnly === item.doneOnly &&
+        previous.totalCount === item.totalCount &&
+        previous.canOrganize === item.canOrganize &&
+        rollupsEqual(previous.rollup, item.rollup)
+      );
+    case "v2-status-group":
+      return (
+        previous.type === "v2-status-group" &&
+        previous.key === item.key &&
+        previous.bucketKey === item.bucketKey &&
+        previous.collapsed === item.collapsed &&
+        previous.doneOnly === item.doneOnly &&
+        previous.totalCount === item.totalCount &&
+        rollupsEqual(previous.rollup, item.rollup)
+      );
+    case "v2-shelf-project-folder":
+      return (
+        previous.type === "v2-shelf-project-folder" &&
+        previous.key === item.key &&
+        previous.shelf === item.shelf &&
+        previous.projectKey === item.projectKey &&
+        previous.stateKey === item.stateKey &&
+        previous.title === item.title &&
+        previous.representative === item.representative &&
+        previous.isScratch === item.isScratch &&
+        previous.collapsed === item.collapsed &&
+        previous.totalCount === item.totalCount
+      );
+    case "v2-triage-empty":
+      return previous.type === "v2-triage-empty" && previous.filter === item.filter;
     case "v2-pending":
       return (
         previous.type === "v2-pending" &&
@@ -578,7 +751,26 @@ function resolveThreadListV2ItemTimeLabel(
   );
 }
 
-export function buildThreadListV2ListItems(input: {
+export interface ThreadListV2GroupingSummary {
+  readonly triageCounts: {
+    readonly all: number;
+    readonly attention: number;
+    readonly done: number;
+    readonly noProject: number;
+  };
+  readonly projectFolderSummary: ReadonlyArray<{
+    readonly projectKey: string;
+    readonly doneOnly: boolean;
+  }>;
+  readonly statusGroupSummary: ReadonlyArray<{
+    readonly bucketKey: SidebarStatusBucketKey;
+    readonly doneOnly: boolean;
+  }>;
+  readonly shelfFolderKeys: ReadonlyArray<string>;
+  readonly noProjectActiveThreads: ReadonlyArray<EnvironmentThreadShell>;
+}
+
+export interface BuildThreadListV2ListItemsInput {
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly workingCount?: number;
@@ -595,11 +787,110 @@ export function buildThreadListV2ListItems(input: {
   readonly queuedThreadKeys?: ReadonlySet<string>;
   readonly moveAvailability?: ReadonlyMap<string, ThreadMoveAvailability>;
   readonly shelfPreferencesLoading?: boolean;
+  readonly groupMode?: SidebarQueueGroupMode;
+  readonly urgencyOrder?: boolean;
+  readonly autoCollapseDone?: boolean;
+  readonly multilineRows?: boolean;
+  readonly triageFilter?: SidebarTriageFilter;
+  readonly projectScopes?: ReadonlyArray<ThreadListV2ProjectFolderScope>;
+  readonly collapsedProjectGroups?: ReadonlySet<string>;
+  readonly collapsedStatusGroups?: ReadonlySet<string>;
+  readonly collapsedShelfProjectGroups?: ReadonlySet<string>;
+  readonly autoCollapseOpenedKeys?: ReadonlySet<string>;
+  readonly canOrganizeNoProject?: boolean;
+  readonly searchActive?: boolean;
   readonly resolve?: MessageResolver;
-}): ThreadListV2ListItem[] {
+}
+
+type ShelfEntryWrapper = {
+  readonly entry: ThreadListV2ThreadListItem;
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+};
+
+function appendShelfProjectEntries(input: {
+  readonly shelf: SidebarShelfKey;
+  readonly shelfEntries: ReadonlyArray<ThreadListV2ThreadListItem>;
+  readonly shelfExpanded: boolean;
+  readonly groupMode: SidebarQueueGroupMode;
+  readonly projectScopes: ReadonlyArray<ThreadListV2ProjectFolderScope>;
+  readonly collapsedShelfProjectGroups: ReadonlySet<string>;
+  readonly compactRow: boolean;
+  readonly searchActive: boolean;
+  readonly result: ThreadListV2ListItem[];
+  readonly shelfFolderKeys: string[];
+}) {
+  if (input.shelfEntries.length === 0) return;
+  if (
+    !input.shelfExpanded ||
+    input.searchActive ||
+    input.groupMode !== "project" ||
+    input.projectScopes.length === 0
+  ) {
+    for (const entry of input.shelfEntries) {
+      input.result.push(input.compactRow ? { ...entry, compactRow: true } : entry);
+    }
+    return;
+  }
+  const adaptedScopes = input.projectScopes.map((scope) => ({
+    ...scope,
+    memberProjectRefs: scope.projectRefs,
+  }));
+  const wrappedEntries: ShelfEntryWrapper[] = input.shelfEntries.map((entry) => ({
+    entry,
+    environmentId: entry.item.thread.environmentId,
+    projectId: entry.item.thread.projectId,
+  }));
+  const grouped = groupShelfThreadsByProject(adaptedScopes, wrappedEntries, (scope) => scope.key);
+  for (const folder of grouped.folders) {
+    const stateKey = sidebarShelfFolderStateKey(input.shelf, folder.group.key);
+    input.shelfFolderKeys.push(stateKey);
+    const collapsed = input.collapsedShelfProjectGroups.has(stateKey);
+    input.result.push({
+      type: "v2-shelf-project-folder",
+      key: `v2-shelf-project:${stateKey}`,
+      shelf: input.shelf,
+      projectKey: folder.group.key,
+      stateKey,
+      title: folder.group.title,
+      representative: folder.group.representative,
+      isScratch: folder.group.isScratch,
+      collapsed,
+      totalCount: folder.threads.length,
+    });
+    if (!collapsed) {
+      for (const wrapped of folder.threads) {
+        input.result.push({
+          ...wrapped.entry,
+          hideProjectIcon: true,
+          compactRow: input.compactRow,
+          indentedInFolder: true,
+        });
+      }
+    }
+  }
+  for (const wrapped of grouped.ungroupedThreads) {
+    input.result.push({
+      ...wrapped.entry,
+      hideProjectIcon: false,
+      compactRow: input.compactRow,
+      indentedInFolder: false,
+    });
+  }
+}
+
+export function buildThreadListV2ListState(input: BuildThreadListV2ListItemsInput): {
+  readonly items: ThreadListV2ListItem[];
+  readonly summary: ThreadListV2GroupingSummary;
+} {
   const resolve = input.resolve ?? m;
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
-  const threadItems = input.items.map((item): ThreadListV2ListItem => {
+  const compactRow = input.multilineRows === false;
+  const groupMode: SidebarQueueGroupMode = input.groupMode ?? "flat";
+  const searchActive = input.searchActive === true;
+  const classifyNow = input.snoozeLabelNow ?? "";
+
+  const threadItems: ThreadListV2ThreadListItem[] = input.items.map((item) => {
     const snoozeWakeLabelText =
       item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
         ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow }, resolve)
@@ -628,6 +919,7 @@ export function buildThreadListV2ListItems(input: {
         queuedThreadKeys?.has(`${item.thread.environmentId}:${item.thread.id}`) === true,
       canMoveUp: move?.canMoveUp === true,
       canMoveDown: move?.canMoveDown === true,
+      ...(compactRow ? { compactRow: true } : {}),
     };
   });
   const pendingItems = input.pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
@@ -637,6 +929,7 @@ export function buildThreadListV2ListItems(input: {
     showPendingDivider: index === 0,
     showTrailingDivider: false,
   }));
+
   const workingCount = input.workingCount ?? 0;
   const workingShelfHeaderIndex = input.workingShelfHeaderIndex ?? null;
   const snoozedCount = input.snoozedCount ?? 0;
@@ -646,8 +939,191 @@ export function buildThreadListV2ListItems(input: {
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
   const activeEnd = workingShelfHeaderIndex ?? workingEnd;
-  const result: ThreadListV2ListItem[] = [...pendingItems, ...threadItems.slice(0, activeEnd)];
+
+  const projectScopes = input.projectScopes ?? [];
+  const scratchProjectKeys = buildScratchProjectKeySet(
+    projectScopes.map((scope) => ({
+      isScratch: scope.isScratch,
+      memberProjectRefs: scope.projectRefs,
+    })),
+  );
+  const preShelfEntries = threadItems.slice(0, activeEnd);
+  const pinnedEntries = preShelfEntries.filter((entry) => entry.item.pinned);
+  const activeEntries = preShelfEntries.filter((entry) => !entry.item.pinned);
+
+  const classifyEntry = (entry: ThreadListV2ThreadListItem) =>
+    classifyThreadListV2Triage(entry.item.thread, classifyNow, entry.item.wokeAt);
+
+  const activeTriageSubjects = activeEntries.map((entry) => ({
+    entry,
+    environmentId: entry.item.thread.environmentId,
+    projectId: entry.item.thread.projectId,
+  }));
+  const triageCounts = countTriageBucketsWith(activeTriageSubjects, scratchProjectKeys, (subject) =>
+    classifyEntry(subject.entry),
+  );
+  const noProjectActiveThreads = preShelfEntries
+    .filter((entry) =>
+      scratchProjectKeys.has(`${entry.item.thread.environmentId}:${entry.item.thread.projectId}`),
+    )
+    .map((entry) => entry.item.thread);
+
+  const result: ThreadListV2ListItem[] = [...pendingItems];
+  const projectFolderSummary: Array<{ readonly projectKey: string; readonly doneOnly: boolean }> =
+    [];
+  const statusGroupSummary: Array<{
+    readonly bucketKey: SidebarStatusBucketKey;
+    readonly doneOnly: boolean;
+  }> = [];
+  const shelfFolderKeys: string[] = [];
+
+  if (searchActive || groupMode === "flat") {
+    result.push(...preShelfEntries);
+  } else {
+    if (pinnedEntries.length > 0) {
+      result.push({
+        type: "v2-pinned-strip",
+        key: "v2:pinned-strip",
+        entries: pinnedEntries,
+        count: pinnedEntries.length,
+      });
+    }
+    const triageFilter = input.triageFilter ?? "all";
+    const filteredActive = filterThreadsByTriageWith(
+      activeTriageSubjects,
+      triageFilter,
+      scratchProjectKeys,
+      (subject) => classifyEntry(subject.entry),
+    ).map((subject) => subject.entry);
+
+    const autoCollapseDone = input.autoCollapseDone === true;
+    const autoCollapseOpenedKeys = input.autoCollapseOpenedKeys ?? new Set<string>();
+    const collapsedProjectGroups = input.collapsedProjectGroups ?? new Set<string>();
+    const collapsedStatusGroups = input.collapsedStatusGroups ?? new Set<string>();
+
+    if (
+      triageFilter !== "all" &&
+      filteredActive.length === 0 &&
+      (activeEntries.length > 0 ||
+        pinnedEntries.length > 0 ||
+        workingCount > 0 ||
+        snoozedCount > 0 ||
+        settledCount > 0)
+    ) {
+      result.push({
+        type: "v2-triage-empty",
+        key: "v2:triage-empty",
+        filter: triageFilter,
+      });
+    } else if (groupMode === "project") {
+      const scopeByProjectKey = new Map<string, ThreadListV2ProjectFolderScope>();
+      const entriesByScopeKey = new Map<string, ThreadListV2ThreadListItem[]>();
+      for (const scope of projectScopes) {
+        for (const ref of scope.projectRefs) {
+          scopeByProjectKey.set(`${ref.environmentId}:${ref.projectId}`, scope);
+        }
+      }
+      const ungroupedEntries: ThreadListV2ThreadListItem[] = [];
+      for (const entry of filteredActive) {
+        const key = `${entry.item.thread.environmentId}:${entry.item.thread.projectId}`;
+        const scope = scopeByProjectKey.get(key);
+        if (scope === undefined) {
+          ungroupedEntries.push(entry);
+          continue;
+        }
+        const bucket = entriesByScopeKey.get(scope.key);
+        if (bucket === undefined) entriesByScopeKey.set(scope.key, [entry]);
+        else bucket.push(entry);
+      }
+      const baseFolders = projectScopes.flatMap((scope) => {
+        const threads = entriesByScopeKey.get(scope.key);
+        return threads && threads.length > 0 ? [{ scope, threads }] : [];
+      });
+      const orderedFolders =
+        input.urgencyOrder !== false
+          ? sortProjectFoldersByUrgencyWith(
+              baseFolders,
+              classifyEntry,
+              (folder) => folder.scope.isScratch,
+            )
+          : baseFolders;
+      for (const folder of orderedFolders) {
+        const rollup = computeSidebarGroupRollupWith(folder.threads, classifyEntry);
+        const doneOnly = isSidebarGroupDoneOnlyWith(folder.threads, classifyEntry);
+        projectFolderSummary.push({ projectKey: folder.scope.key, doneOnly });
+        const autoCollapsed =
+          autoCollapseDone && doneOnly && !autoCollapseOpenedKeys.has(folder.scope.key);
+        const collapsed = autoCollapsed || collapsedProjectGroups.has(folder.scope.key);
+        result.push({
+          type: "v2-project-folder",
+          key: `v2-project-folder:${folder.scope.key}`,
+          projectKey: folder.scope.key,
+          title: folder.scope.title,
+          representative: folder.scope.representative,
+          isScratch: folder.scope.isScratch,
+          collapsed,
+          doneOnly,
+          totalCount: folder.threads.length,
+          rollup,
+          canOrganize:
+            folder.scope.isScratch &&
+            input.canOrganizeNoProject === true &&
+            folder.threads.length > 0,
+        });
+        if (!collapsed) {
+          for (const entry of folder.threads) {
+            result.push({
+              ...entry,
+              hideProjectIcon: true,
+              compactRow,
+              indentedInFolder: true,
+            });
+          }
+        }
+      }
+      for (const entry of ungroupedEntries) {
+        result.push({
+          ...entry,
+          hideProjectIcon: false,
+          compactRow,
+          indentedInFolder: false,
+        });
+      }
+    } else {
+      const buckets = groupThreadsByStatusWith(filteredActive, classifyEntry);
+      for (const bucket of buckets) {
+        const rollup = computeSidebarGroupRollupWith(bucket.threads, classifyEntry);
+        const doneOnly =
+          bucket.key === "done" || isSidebarGroupDoneOnlyWith(bucket.threads, classifyEntry);
+        statusGroupSummary.push({ bucketKey: bucket.key, doneOnly });
+        const autoCollapsed =
+          autoCollapseDone && doneOnly && !autoCollapseOpenedKeys.has(bucket.key);
+        const collapsed = autoCollapsed || collapsedStatusGroups.has(bucket.key);
+        result.push({
+          type: "v2-status-group",
+          key: `v2-status-group:${bucket.key}`,
+          bucketKey: bucket.key,
+          collapsed,
+          doneOnly,
+          totalCount: bucket.threads.length,
+          rollup,
+        });
+        if (!collapsed) {
+          for (const entry of bucket.threads) {
+            result.push({
+              ...entry,
+              hideProjectIcon: false,
+              compactRow,
+              indentedInFolder: true,
+            });
+          }
+        }
+      }
+    }
+  }
+
   const shelfDisabled = input.shelfPreferencesLoading === true;
+  const collapsedShelfProjectGroups = input.collapsedShelfProjectGroups ?? new Set<string>();
   if (workingShelfHeaderIndex !== null && workingCount > 0) {
     result.push({
       type: "v2-working-shelf",
@@ -656,7 +1132,18 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.workingShelfExpanded === true,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(workingShelfHeaderIndex, workingEnd));
+    appendShelfProjectEntries({
+      shelf: "working",
+      shelfEntries: threadItems.slice(workingShelfHeaderIndex, workingEnd),
+      shelfExpanded: input.workingShelfExpanded === true,
+      groupMode,
+      projectScopes,
+      collapsedShelfProjectGroups,
+      compactRow,
+      searchActive,
+      result,
+      shelfFolderKeys,
+    });
   }
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
@@ -666,7 +1153,18 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.snoozedShelfExpanded === true,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(snoozedShelfHeaderIndex, snoozedEnd));
+    appendShelfProjectEntries({
+      shelf: "snoozed",
+      shelfEntries: threadItems.slice(snoozedShelfHeaderIndex, snoozedEnd),
+      shelfExpanded: input.snoozedShelfExpanded === true,
+      groupMode,
+      projectScopes,
+      collapsedShelfProjectGroups,
+      compactRow,
+      searchActive,
+      result,
+      shelfFolderKeys,
+    });
   }
   if (settledShelfHeaderIndex !== null && settledCount > 0) {
     result.push({
@@ -676,9 +1174,20 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.settledShelfExpanded !== false,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(settledShelfHeaderIndex));
+    appendShelfProjectEntries({
+      shelf: "settled",
+      shelfEntries: threadItems.slice(settledShelfHeaderIndex),
+      shelfExpanded: input.settledShelfExpanded !== false,
+      groupMode,
+      projectScopes,
+      collapsedShelfProjectGroups,
+      compactRow,
+      searchActive,
+      result,
+      shelfFolderKeys,
+    });
   }
-  return result.map((entry, index) => {
+  const items = result.map((entry, index) => {
     if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
     const next = result[index + 1];
     const showTrailingDivider =
@@ -687,6 +1196,22 @@ export function buildThreadListV2ListItems(input: {
       ? entry
       : { ...entry, showTrailingDivider };
   });
+  return {
+    items,
+    summary: {
+      triageCounts,
+      projectFolderSummary,
+      statusGroupSummary,
+      shelfFolderKeys,
+      noProjectActiveThreads,
+    },
+  };
+}
+
+export function buildThreadListV2ListItems(
+  input: BuildThreadListV2ListItemsInput,
+): ThreadListV2ListItem[] {
+  return buildThreadListV2ListState(input).items;
 }
 
 // Immutable shells and field-only sorting make element-identical inputs produce identical output.

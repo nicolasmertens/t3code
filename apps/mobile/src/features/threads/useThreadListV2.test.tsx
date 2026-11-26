@@ -2,7 +2,7 @@ import { act, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { RegistryContext } from "@effect/atom-react";
 import type { OlderSettledShelfEnvironment } from "@t3tools/client-runtime/state/threads";
-import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { presentThreadShell, type EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import * as DateTime from "effect/DateTime";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { Atom, AtomRegistry } from "effect/reactivity";
@@ -241,4 +241,124 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
   expect(loaded.layout.items).toHaveLength(160);
   expect(loaded.olderSettledShelf.isListed(threads[150]!)).toBe(true);
   expect(loaded.items).not.toBe(loading.items);
+});
+
+it("derives project grouping, triage counts, and shelf summaries cleanly in useThreadListV2", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  using _globals = { [Symbol.dispose]: () => vi.unstubAllGlobals() };
+  const shelfAtom = Atom.make<ReadonlyMap<EnvironmentId, OlderSettledShelfEnvironment>>(new Map());
+  vi.mocked(olderSettledThreads.shelfAtom).mockReturnValue(shelfAtom);
+  const registry = AtomRegistry.make();
+  using _registry = { [Symbol.dispose]: () => registry.dispose() };
+  const environmentId = EnvironmentId.make("environment-1");
+  const alphaId = ProjectId.make("alpha");
+  const scratchId = ProjectId.make("scratch");
+  const makeProject = (id: ProjectId, title: string, isScratch = false): EnvironmentProject => ({
+    id,
+    environmentId,
+    title,
+    workspaceRoot: `/workspaces/${id}`,
+    repositoryIdentity: null,
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...(isScratch ? { isScratch: true } : {}),
+  });
+  const projectScopes = [
+    {
+      key: `${environmentId}:alpha`,
+      title: "Alpha",
+      representative: makeProject(alphaId, "Alpha"),
+      projectRefs: [{ environmentId, projectId: alphaId }],
+      isScratch: false,
+      pinned: false,
+      archived: false,
+    },
+    {
+      key: `${environmentId}:scratch`,
+      title: "No project",
+      representative: makeProject(scratchId, "No project", true),
+      projectRefs: [{ environmentId, projectId: scratchId }],
+      isScratch: true,
+      pinned: false,
+      archived: false,
+    },
+  ];
+  const threads = [
+    {
+      ...presentThreadShell(
+        environmentId,
+        makeRawThreadShell({
+          id: ThreadId.make("t-alpha"),
+          projectId: alphaId,
+          title: "Alpha thread",
+        }),
+      ),
+      hasPendingApprovals: true,
+    },
+    presentThreadShell(
+      environmentId,
+      makeRawThreadShell({
+        id: ThreadId.make("t-scratch"),
+        projectId: scratchId,
+        title: "Scratch thread",
+      }),
+    ),
+  ];
+  const environmentIds = new Set([environmentId]);
+  const baseInput: Parameters<typeof useThreadListV2>[0] = {
+    threads,
+    pendingTasks: [],
+    environmentId: null,
+    projectRefs: null,
+    searchQuery: "",
+    searchMatches: new Map(),
+    settlementEnvironmentIds: environmentIds,
+    snoozeEnvironmentIds: environmentIds,
+    pinReorderEnvironmentIds: environmentIds,
+    activeReorderEnvironmentIds: environmentIds,
+    queuedThreadKeys: new Set(),
+    settledLimit: 10,
+    now: "2026-01-02T00:00:00.000Z",
+    pendingOrder: null,
+    shelfPreferencesLoaded: true,
+    workingShelfEnabled: true,
+    workingShelfExpanded: false,
+    snoozedShelfExpanded: false,
+    settledShelfExpanded: false,
+    selectedThreadKey: null,
+    groupMode: "project",
+    urgencyOrder: true,
+    multilineRows: false,
+    projectScopes,
+    canOrganizeNoProject: true,
+  };
+  let latest!: ReturnType<typeof useThreadListV2>;
+  function Probe(props: { input: typeof baseInput }) {
+    latest = useThreadListV2(props.input);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  using _root = { [Symbol.dispose]: () => act(() => root.unmount()) };
+  await act(async () =>
+    root.render(
+      <RegistryContext value={registry}>
+        <Probe input={baseInput} />
+      </RegistryContext>,
+    ),
+  );
+  expect(latest.triageCounts).toEqual({
+    all: 2,
+    attention: 1,
+    done: 0,
+    noProject: 1,
+  });
+  expect(latest.items.map((item) => item.type)).toEqual([
+    "v2-project-folder",
+    "v2-thread",
+    "v2-project-folder",
+    "v2-thread",
+  ]);
+  expect(latest.noProjectActiveThreads.map((t) => t.id)).toEqual(["t-scratch"]);
 });

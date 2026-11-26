@@ -59,11 +59,14 @@ import {
 } from "@t3tools/client-runtime/environment";
 import {
   AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
   type ContextMenuSource,
   ProjectId,
   type ScopedThreadRef,
+  type SidebarQueueGroupMode,
   type ThreadId,
 } from "@t3tools/contracts";
+import { resolveRemoteSidebarQueuePreferencesUpdate } from "@t3tools/client-runtime/state/sidebar-grouping";
 import {
   resolveListedAncestorThreadRef,
   type OlderSettledScope,
@@ -159,12 +162,13 @@ import {
   useQuietThreadShells,
 } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
-import { primaryServerKeybindingsAtom } from "../state/server";
+import { primaryServerKeybindingsAtom, serverEnvironment } from "../state/server";
 import { environmentProjects } from "../state/projects";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { threadEnvironment } from "../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
 import { useThreadSearch } from "../state/queries";
+import { useAtomCommand } from "../state/use-atom-command";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -1201,6 +1205,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const setSidebarUrgencyOrder = useUiStateStore((store) => store.setSidebarUrgencyOrder);
   const sidebarAutoCollapseDone = useUiStateStore((store) => store.sidebarAutoCollapseDone);
   const setSidebarAutoCollapseDone = useUiStateStore((store) => store.setSidebarAutoCollapseDone);
+  const sidebarQueuePreferencesSyncedAt = useUiStateStore(
+    (store) => store.sidebarQueuePreferencesSyncedAt,
+  );
+  const setSidebarQueuePreferencesSyncedAt = useUiStateStore(
+    (store) => store.setSidebarQueuePreferencesSyncedAt,
+  );
+  const updateSidebarServerSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "sidebar queue preferences",
+    reportFailure: false,
+  });
   const setProjectsExpandedBatch = useUiStateStore((store) => store.setProjectsExpandedBatch);
   const setStatusGroupsExpandedBatch = useUiStateStore(
     (store) => store.setStatusGroupsExpandedBatch,
@@ -1210,7 +1224,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const groupMode = resolveEffectiveSidebarGroupMode(persistedGroupMode, boringSidebarEnabled);
   const isGroupedMode = groupMode !== "flat";
-  const [triageFilter, setTriageFilter] = useState<SidebarTriageFilter>("all");
+  const [rawTriageFilter, setTriageFilter] = useState<SidebarTriageFilter>("all");
+  const triageFilter: SidebarTriageFilter = groupMode === "flat" ? "all" : rawTriageFilter;
   const [autoCollapseOpenedKeys, setAutoCollapseOpenedKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -1616,11 +1631,62 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
   });
 
+  const remoteQueuePreferencesUpdate = resolveRemoteSidebarQueuePreferencesUpdate(
+    [...serverConfigs.values()].map((config) => config.settings?.sidebarQueuePreferences),
+    sidebarQueuePreferencesSyncedAt,
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- applies cross-device sidebar queue preferences from connected server settings
+  useEffect(() => {
+    if (remoteQueuePreferencesUpdate === null) return;
+    const { preferences: remote, updatedAt } = remoteQueuePreferencesUpdate;
+    setSidebarQueuePreferencesSyncedAt(updatedAt);
+    if (remote.groupMode !== undefined) {
+      setSidebarGroupMode(remote.groupMode);
+    }
+    if (remote.urgencyOrder !== undefined) {
+      setSidebarUrgencyOrder(remote.urgencyOrder);
+    }
+    if (remote.autoCollapseDone !== undefined) {
+      setSidebarAutoCollapseDone(remote.autoCollapseDone);
+    }
+    if (remote.workingShelfEnabled !== undefined) {
+      void updateClientSettings({ sidebarWorkingShelfEnabled: remote.workingShelfEnabled });
+    }
+  }, [
+    remoteQueuePreferencesUpdate,
+    setSidebarAutoCollapseDone,
+    setSidebarGroupMode,
+    setSidebarQueuePreferencesSyncedAt,
+    setSidebarUrgencyOrder,
+  ]);
+
+  const publishSidebarQueuePreferences = useStableCallback(
+    (next: {
+      readonly groupMode?: SidebarQueueGroupMode | null;
+      readonly urgencyOrder?: boolean;
+      readonly autoCollapseDone?: boolean;
+      readonly workingShelfEnabled?: boolean;
+    }) => {
+      const updatedAt = new Date().toISOString();
+      setSidebarQueuePreferencesSyncedAt(updatedAt);
+      const snapshot = { ...next, updatedAt };
+      for (const [environmentId, config] of serverConfigs) {
+        if (config.settings === undefined) continue;
+        if (!readEnvironmentScope(environmentId, AuthSettingsWriteScope)) continue;
+        void updateSidebarServerSettings({
+          environmentId,
+          input: { patch: { sidebarQueuePreferences: snapshot } },
+        });
+      }
+    },
+  );
+
   const handleGroupModeChange = useStableCallback((nextMode: "flat" | "project" | "status") => {
     setSidebarGroupMode(nextMode);
     if (nextMode === "flat") {
       setTriageFilter("all");
     }
+    publishSidebarQueuePreferences({ groupMode: nextMode });
   });
   const handleToggleProjectFolder = (group: SidebarProjectSnapshot) => {
     const folder = projectFolders?.find((entry) => entry.group.projectKey === group.projectKey);
@@ -3750,16 +3816,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   multilineRows={folderRowsMultiline}
                   workingShelfEnabled={workingShelfEnabled}
                   onModeChange={handleGroupModeChange}
-                  onUrgencyOrderChange={setSidebarUrgencyOrder}
+                  onUrgencyOrderChange={(enabled) => {
+                    setSidebarUrgencyOrder(enabled);
+                    publishSidebarQueuePreferences({ urgencyOrder: enabled });
+                  }}
                   onAutoCollapseDoneChange={(enabled) => {
                     setSidebarAutoCollapseDone(enabled);
                     if (enabled) setAutoCollapseOpenedKeys(new Set());
+                    publishSidebarQueuePreferences({ autoCollapseDone: enabled });
                   }}
                   onMultilineRowsChange={(enabled) => {
                     void updateClientSettings({ boringSidebarMultilineRows: enabled });
                   }}
                   onWorkingShelfEnabledChange={(enabled) => {
                     void updateClientSettings({ sidebarWorkingShelfEnabled: enabled });
+                    publishSidebarQueuePreferences({ workingShelfEnabled: enabled });
                   }}
                   onExpandAll={handleExpandAllGroups}
                   onCollapseDone={handleCollapseDoneGroups}

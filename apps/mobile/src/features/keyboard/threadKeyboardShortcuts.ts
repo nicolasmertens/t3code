@@ -21,6 +21,12 @@ export function threadJumpTarget(
   let index = threadJumpIndex(command);
   if (index < 0) return null;
   for (const item of items) {
+    if (item.type === "v2-pinned-strip") {
+      for (const entry of item.entries) {
+        if (index-- === 0) return entry;
+      }
+      continue;
+    }
     if (item.type !== "v2-thread" && item.type !== "v2-pending") continue;
     if (index-- === 0) return item;
   }

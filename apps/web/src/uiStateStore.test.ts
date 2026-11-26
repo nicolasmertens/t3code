@@ -24,6 +24,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     sidebarGroupMode: null,
     sidebarUrgencyOrder: true,
     sidebarAutoCollapseDone: false,
+    sidebarQueuePreferencesSyncedAt: null,
     sidebarStatusGroupExpandedById: {},
     sidebarShelfFolderExpandedById: {},
     threadLastVisitedAtById: {},
@@ -127,6 +128,7 @@ describe("parsePersistedState", () => {
       sidebarGroupMode: null,
       sidebarUrgencyOrder: true,
       sidebarAutoCollapseDone: false,
+      sidebarQueuePreferencesSyncedAt: null,
       sidebarStatusGroupExpandedById: {},
       sidebarShelfFolderExpandedById: {},
       pullRequestMergeMethod: "merge",
@@ -219,6 +221,7 @@ describe("uiStateStore persistence", () => {
       sidebarGroupMode: null,
       sidebarUrgencyOrder: true,
       sidebarAutoCollapseDone: false,
+      sidebarQueuePreferencesSyncedAt: null,
       sidebarStatusGroupExpandedById: {},
       sidebarShelfFolderExpandedById: {},
       pullRequestMergeMethod: "merge",
@@ -297,6 +300,15 @@ describe("uiStateStore persistence", () => {
         "working:proj-a": true,
         "settled:proj-b": false,
       });
+
+      useUiStateStore.getState().setSidebarQueuePreferencesSyncedAt("2026-11-26T12:00:00.000Z");
+      persistState(useUiStateStore.getState());
+      const syncedPersisted = JSON.parse(
+        localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+      ) as PersistedUiState;
+      expect(parsePersistedState(syncedPersisted).sidebarQueuePreferencesSyncedAt).toBe(
+        "2026-11-26T12:00:00.000Z",
+      );
     } finally {
       useUiStateStore.setState(prev, true);
     }
