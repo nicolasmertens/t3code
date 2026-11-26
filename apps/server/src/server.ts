@@ -906,7 +906,11 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
       Layer.provide(
-        FleetPanelHttp.layer.pipe(Layer.provide(FleetPanelService.FleetPanelService.layer)),
+        FleetPanelHttp.layer.pipe(
+          Layer.provide(
+            FleetPanelService.FleetPanelService.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+          ),
+        ),
       ),
       Layer.provide(speechHttpApiLayer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
