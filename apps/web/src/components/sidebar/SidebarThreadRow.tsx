@@ -5,7 +5,6 @@ import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
 import { formatWorktreePathForDisplay } from "../../worktreeCleanup";
 import { contextMenuSourceOf } from "../../contextMenuSource";
-import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { useDeadlinePassed } from "~/hooks/useDeadline";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
@@ -47,7 +46,6 @@ import {
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotDashedIcon,
-  ClockIcon,
   FolderGit2Icon,
   FolderInputIcon,
   GitBranchIcon,
@@ -115,7 +113,8 @@ import {
   useLinkedThreadPullRequest,
   ThreadSearchPullRequestNumber,
 } from "../ThreadStatusIndicators";
-import { pickSnoozePreset, resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
+import { type SnoozePreset } from "../Sidebar.snooze";
+import { SnoozePopover } from "./SnoozePopover";
 import { useThreadShell } from "../../state/entities";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
@@ -126,7 +125,6 @@ import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../provi
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { InlineButton } from "../ui/button";
 import { Kbd } from "../ui/kbd";
-import { Menu, MenuItem, MenuItemDetail, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { ActivityShimmerOverlay } from "../chat/TimelineRowParts";
@@ -401,73 +399,6 @@ function SidebarThreadTooltip({
         ) : null}
       </ThreadHoverCard>
     </ThreadHoverCardPopup>
-  );
-}
-
-function SnoozeMenuButton(props: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil">) => void;
-  timestampFormat: TimestampFormat;
-  environmentId: EnvironmentId;
-}) {
-  const { open, onOpenChange, onSnooze, timestampFormat, environmentId } = props;
-  const gt = useGT();
-  const messages = useMessages();
-  const presets = open
-    ? // oxlint-disable-next-line react/purity -- Presets are resolved only while the menu is open, so each opening reads a fresh time.
-      resolveSnoozePresets(new Date(), timestampFormat, environmentId, messages)
-    : [];
-  return (
-    <Menu open={open} onOpenChange={onOpenChange}>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <MenuTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label={gt("Snooze thread")}
-                  onClick={(event) => event.stopPropagation()}
-                  onDoubleClick={(event) => event.stopPropagation()}
-                  className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                />
-              }
-            />
-          }
-        >
-          <ClockIcon className="size-3" />
-        </TooltipTrigger>
-        <TooltipPopup>
-          <T>Snooze thread</T>
-        </TooltipPopup>
-      </Tooltip>
-      <MenuPopup side="bottom" align="end">
-        {presets.map((preset) => (
-          <MenuItem
-            key={preset.id}
-            onClick={(event) => {
-              event.stopPropagation();
-              const picked = pickSnoozePreset(presets, preset.id, timestampFormat, environmentId);
-              if (picked) onSnooze(picked);
-            }}
-          >
-            {preset.label}
-            <MenuItemDetail>{preset.whenLabel}</MenuItemDetail>
-          </MenuItem>
-        ))}
-        {presets.length > 0 ? <MenuSeparator /> : null}
-        <MenuItem
-          onClick={async (event) => {
-            event.stopPropagation();
-            const choice = await requestCustomSnooze();
-            if (choice) onSnooze(choice);
-          }}
-        >
-          <T>Custom…</T>
-        </MenuItem>
-      </MenuPopup>
-    </Menu>
   );
 }
 
@@ -1543,12 +1474,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         </Tooltip>
                       ) : null}
                       {showSnoozeButton && variantAction === "settle" ? (
-                        <SnoozeMenuButton
+                        <SnoozePopover
                           open={snoozeMenuOpen}
                           onOpenChange={setSnoozeMenuOpen}
                           onSnooze={handleSnoozePreset}
                           timestampFormat={props.timestampFormat}
                           environmentId={thread.environmentId}
+                          threadId={thread.id}
+                          hasLinkedPullRequest={
+                            pr !== null ||
+                            thread.pullRequests.length > 0 ||
+                            thread.linkedPullRequest !== null
+                          }
+                          linkedPullRequestLabel={
+                            pr
+                              ? `#${pr.number}`
+                              : currentLinkedPr?.number != null
+                                ? `#${currentLinkedPr.number}`
+                                : null
+                          }
                         />
                       ) : null}
                       {variantAction === "unsnooze" ? (
@@ -1814,12 +1758,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         </Tooltip>
                       ) : null}
                       {showSnoozeButton ? (
-                        <SnoozeMenuButton
+                        <SnoozePopover
                           open={snoozeMenuOpen}
                           onOpenChange={setSnoozeMenuOpen}
                           onSnooze={handleSnoozePreset}
                           timestampFormat={props.timestampFormat}
                           environmentId={thread.environmentId}
+                          threadId={thread.id}
+                          hasLinkedPullRequest={
+                            pr !== null ||
+                            thread.pullRequests.length > 0 ||
+                            thread.linkedPullRequest !== null
+                          }
+                          linkedPullRequestLabel={
+                            pr
+                              ? `#${pr.number}`
+                              : currentLinkedPr?.number != null
+                                ? `#${currentLinkedPr.number}`
+                                : null
+                          }
                         />
                       ) : null}
                       {props.settlementSupported ? (
