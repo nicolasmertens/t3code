@@ -2,6 +2,7 @@ import * as Notifications from "expo-notifications";
 
 import { setAndroidThreadOnScreen } from "./androidNotifications";
 import { foregroundNotificationBehavior } from "./foregroundNotificationBehavior";
+import { notifyOpenAgentThreadDeepLink } from "./notificationDismissal";
 import { routeAgentNotificationResponseOnce, threadDeepLinkOnScreen } from "./notificationPayload";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
 
@@ -11,6 +12,7 @@ let deepLinkOnScreen: string | null = null;
 export function setAgentNotificationPathname(pathname: string): void {
   deepLinkOnScreen = threadDeepLinkOnScreen(pathname);
   setAndroidThreadOnScreen(deepLinkOnScreen);
+  notifyOpenAgentThreadDeepLink(deepLinkOnScreen);
 }
 
 /**

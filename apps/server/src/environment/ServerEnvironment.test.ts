@@ -385,6 +385,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
               registerLiveActivity: () => Effect.succeed({ ok: true as const }),
               getSnapshot: () => Effect.succeed({ aggregate: null }),
               publishThreadState: () => Effect.void,
+              dismissThreadNotifications: () => Effect.void,
             }),
           ),
         ),

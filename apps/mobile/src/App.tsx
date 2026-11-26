@@ -38,6 +38,7 @@ import {
   installAgentNotificationNavigation,
   setAgentNotificationPathname,
 } from "./features/agent-awareness/notificationNavigation";
+import { AgentNotificationDismissalCoordinator } from "./features/agent-awareness/notificationDismissal";
 import {
   installAppShortcuts,
   republishAppShortcuts,
@@ -321,6 +322,7 @@ function AppContent() {
     <>
       <SplashScreenCoordinator />
       <QuickActionsLanguage />
+      <AgentNotificationDismissalCoordinator />
       <SubscriptionUsageCoordinator />
       <ConnectDeviceApprovalCoordinator />
       <GestureHandlerRootView className="flex-1">

@@ -17,10 +17,13 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ServerConfig from "../config.ts";
 import { makeAggregateState } from "./directApnsAggregate.ts";
 import {
+  alertCollapseId,
   createApnsJwtSigner,
   createDirectApnsClient,
+  dismissSyncCollapseId,
   MAX_LIVE_ACTIVITY_PAYLOAD_BYTES,
   makeLiveActivityRequest,
+  makeSilentDismissRequest,
   type DirectApnsDeliveryResult,
   type DirectApnsHttp2TransportInput,
 } from "./directApnsClient.ts";
@@ -32,6 +35,7 @@ const NOW_MS = Date.parse(NOW_ISO);
 const ENV_ID = EnvironmentId.make("env-1");
 const THREAD_1 = ThreadId.make("thread-1");
 const THREAD_2 = ThreadId.make("thread-2");
+const THREAD_3 = ThreadId.make("thread-3");
 
 function generateTestApnsKeyPair() {
   const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", {
@@ -241,7 +245,7 @@ describe("DirectApnsService", () => {
         });
 
         // Completing the only thread should send:
-        // 1) One alert push notification (`apns-push-type: alert`), AND
+        // 1) One alert push notification (`apns-push-type: alert` with per-thread collapse-id), AND
         // 2) One silent Live Activity `end` update (`aps.alert` omitted because push already alerted!).
         deliveries.length = 0;
         yield* service2.publishThreadState({
@@ -261,6 +265,7 @@ describe("DirectApnsService", () => {
         assert.isDefined(pushReq);
         assert.isDefined(laEndReq);
         assert.equal(pushReq?.path, "/3/device/push-tok-1");
+        assert.equal(pushReq?.headers["apns-collapse-id"], alertCollapseId(ENV_ID, THREAD_1));
         assert.equal(laEndReq?.path, "/3/device/la-tok-1");
         const laBody = JSON.parse(laEndReq!.body) as {
           readonly aps: {
@@ -311,6 +316,217 @@ describe("DirectApnsService", () => {
           }),
         });
         assert.equal(deliveries.length, 0);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "alerts with per-thread collapse-id, past 5 active threads, persists activeNotifications, and sends self-healing silent dismiss batches",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW_MS);
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "direct-apns-fix-" });
+        const { privateKeyPem } = generateTestApnsKeyPair();
+        const deliveries: Array<DirectApnsHttp2TransportInput> = [];
+
+        const config = {
+          keyPath: "/tmp/test.p8",
+          keyId: "Z5KG8Z5T78",
+          teamId: "33QSRBWAD4",
+          bundleId: "com.nicolasmertens.browne",
+          appTitle: "Browne",
+          privateKeyPem,
+        };
+        const client = createDirectApnsClient(config, {
+          transport: {
+            send: async (req) => {
+              deliveries.push(req);
+              return { ok: true, status: 200, apnsId: "apns-1" };
+            },
+          },
+        });
+        const makeService = () =>
+          DirectApnsService.make({ config, client }).pipe(
+            Effect.provide(
+              ServerConfig.layerTest(process.cwd(), baseDir).pipe(
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          );
+
+        const svc = yield* makeService();
+        yield* svc.registerDevice({
+          deviceId: "iphone-1",
+          label: "NiPhone17",
+          platform: "ios",
+          iosMajorVersion: 27,
+          bundleId: "com.nicolasmertens.browne",
+          apsEnvironment: "production",
+          pushToken: "tok-1",
+          preferences: {
+            liveActivitiesEnabled: false,
+            notificationsEnabled: true,
+            notifyOnApproval: true,
+            notifyOnInput: true,
+            notifyOnCompletion: true,
+            notifyOnFailure: true,
+          },
+        });
+
+        // 1. Fresh first completion after startup delivers with alert apns-collapse-id.
+        yield* svc.publishThreadState({
+          environmentId: ENV_ID,
+          threadId: THREAD_1,
+          state: makeActivityState({ threadId: THREAD_1, phase: "completed", updatedAt: NOW_ISO }),
+        });
+        assert.equal(deliveries.length, 1);
+        assert.equal(deliveries[0]?.headers["apns-collapse-id"], alertCollapseId(ENV_ID, THREAD_1));
+        assert.isAtMost(
+          new TextEncoder().encode(deliveries[0]?.headers["apns-collapse-id"] ?? "").byteLength,
+          64,
+        );
+        const firstPayload = JSON.parse(deliveries[0]!.body) as {
+          readonly body: {
+            readonly phase?: string;
+            readonly updatedAt?: string;
+          };
+        };
+        assert.equal(firstPayload.body.phase, "completed");
+        assert.equal(firstPayload.body.updatedAt, NOW_ISO);
+
+        // 2. Restarting and re-publishing same terminal snapshot does NOT double-buzz.
+        deliveries.length = 0;
+        const restarted = yield* makeService();
+        yield* restarted.publishThreadState({
+          environmentId: ENV_ID,
+          threadId: THREAD_1,
+          state: makeActivityState({ threadId: THREAD_1, phase: "completed", updatedAt: NOW_ISO }),
+        });
+        assert.equal(deliveries.length, 0);
+
+        // 3. Running 6 threads keeps notifications working for the 6th thread even beyond MAX_ACTIVITY_ROWS=5.
+        for (let i = 1; i <= 5; i += 1) {
+          yield* restarted.publishThreadState({
+            environmentId: ENV_ID,
+            threadId: ThreadId.make(`active-${i}`),
+            state: makeActivityState({
+              threadId: ThreadId.make(`active-${i}`),
+              phase: "waiting_for_approval",
+              updatedAt: NOW_ISO,
+            }),
+          });
+        }
+        deliveries.length = 0;
+        yield* restarted.publishThreadState({
+          environmentId: ENV_ID,
+          threadId: THREAD_2,
+          state: makeActivityState({
+            threadId: THREAD_2,
+            phase: "waiting_for_input",
+            headline: "Input",
+            updatedAt: NOW_ISO,
+          }),
+        });
+        assert.equal(deliveries.length, 1);
+        assert.equal(deliveries[0]?.headers["apns-push-type"], "alert");
+
+        // 4. Transitioning back to running emits silent background dismiss with per-env collapse-id.
+        deliveries.length = 0;
+        yield* restarted.publishThreadState({
+          environmentId: ENV_ID,
+          threadId: THREAD_2,
+          state: makeActivityState({
+            threadId: THREAD_2,
+            phase: "running",
+            updatedAt: NOW_ISO,
+          }),
+        });
+        assert.equal(deliveries.length, 1);
+        assert.equal(deliveries[0]?.headers["apns-push-type"], "background");
+        assert.equal(deliveries[0]?.headers["apns-priority"], "5");
+        const collapseId = deliveries[0]?.headers["apns-collapse-id"] ?? "";
+        assert.isAtMost(new TextEncoder().encode(collapseId).byteLength, 64);
+        assert.equal(collapseId, dismissSyncCollapseId(ENV_ID));
+
+        // 5. Explicit dismissThreadNotifications (visited) clears THREAD_1 AND includes THREAD_2 in dismissals batch.
+        deliveries.length = 0;
+        yield* restarted.dismissThreadNotifications({
+          environmentId: ENV_ID,
+          threadId: THREAD_1,
+          reason: "visited",
+        });
+        assert.equal(deliveries.length, 1);
+        const dismissBody = JSON.parse(deliveries[0]!.body) as ReturnType<
+          typeof makeSilentDismissRequest
+        >["payload"];
+        assert.deepEqual(dismissBody, {
+          aps: { "content-available": 1 },
+          t3Dismiss: {
+            environmentId: ENV_ID,
+            threadId: THREAD_1,
+            reason: "visited",
+            dismissedAt: NOW_ISO,
+            dismissals: [
+              { environmentId: ENV_ID, threadId: THREAD_2, dismissedAt: NOW_ISO },
+              { environmentId: ENV_ID, threadId: THREAD_1, dismissedAt: NOW_ISO },
+            ],
+          },
+        });
+        // Calling again does not re-send because persisted notification was cleared and recentDismissals deduplicates it.
+        deliveries.length = 0;
+        yield* restarted.dismissThreadNotifications({
+          environmentId: ENV_ID,
+          threadId: THREAD_1,
+          reason: "visited",
+        });
+        assert.equal(deliveries.length, 0);
+
+        // 6. Unrecorded pre-upgrade notification cleared via "handled" fires once, then deduplicates.
+        deliveries.length = 0;
+        yield* restarted.dismissThreadNotifications({
+          environmentId: ENV_ID,
+          threadId: THREAD_3,
+          reason: "handled",
+        });
+        assert.equal(deliveries.length, 1);
+        deliveries.length = 0;
+        yield* restarted.dismissThreadNotifications({
+          environmentId: ENV_ID,
+          threadId: THREAD_3,
+          reason: "handled",
+        });
+        assert.equal(deliveries.length, 0);
+
+        // 7. A new alert for THREAD_1 removes THREAD_1 from recentDismissals so future batches won't dismiss the new banner.
+        const laterIso = "2026-10-18T10:01:00.000Z";
+        yield* TestClock.setTime(Date.parse(laterIso));
+        deliveries.length = 0;
+        yield* restarted.publishThreadState({
+          environmentId: ENV_ID,
+          threadId: THREAD_1,
+          state: makeActivityState({
+            threadId: THREAD_1,
+            phase: "waiting_for_approval",
+            headline: "Approval",
+            updatedAt: laterIso,
+          }),
+        });
+        assert.equal(deliveries.length, 1);
+        assert.equal(deliveries[0]?.headers["apns-push-type"], "alert");
+
+        deliveries.length = 0;
+        yield* restarted.dismissThreadNotifications({
+          environmentId: ENV_ID,
+          threadId: ThreadId.make("active-1"),
+          reason: "visited",
+        });
+        assert.equal(deliveries.length, 1);
+        const batchAfterReAlert = JSON.parse(deliveries[0]!.body) as ReturnType<
+          typeof makeSilentDismissRequest
+        >["payload"];
+        assert.isFalse(
+          batchAfterReAlert.t3Dismiss.dismissals.some((entry) => entry.threadId === THREAD_1),
+        );
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

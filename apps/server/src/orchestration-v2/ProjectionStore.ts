@@ -1247,6 +1247,7 @@ export type AgentAwarenessThread = ProjectThreadAwarenessV2Input["thread"] &
     | "projectId"
     | "creationSource"
     | "latestRunCompletedAt"
+    | "lastVisitedAt"
     | "archivedAt"
     | "snoozedUntil"
     | "snoozedAt"
@@ -9494,6 +9495,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               status: state.latestRunStatus,
               activityRunStatus: state.activityRunStatus,
               latestRunCompletedAt: state.latestRunCompletedAt,
+              lastVisitedAt: state.thread.lastVisitedAt,
               latestRunStopRequested: state.latestRunStopRequested,
               latestRunBackgroundWake: state.latestRunBackgroundWake,
               pendingRuntimeRequest: state.pendingRuntimeRequest,

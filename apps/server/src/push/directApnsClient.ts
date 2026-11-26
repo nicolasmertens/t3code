@@ -37,7 +37,31 @@ interface DirectApnsLiveActivityRequest {
 interface DirectApnsPushNotificationRequest {
   readonly token: string;
   readonly priority: "10";
+  readonly collapseId: string;
   readonly payload: unknown;
+}
+
+export interface DirectApnsDismissEntry {
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly dismissedAt: string;
+}
+
+interface DirectApnsSilentDismissRequest {
+  readonly token: string;
+  readonly collapseId: string;
+  readonly payload: {
+    readonly aps: {
+      readonly "content-available": 1;
+    };
+    readonly t3Dismiss: {
+      readonly environmentId: string;
+      readonly threadId: string;
+      readonly reason: "visited" | "handled";
+      readonly dismissedAt: string;
+      readonly dismissals: ReadonlyArray<DirectApnsDismissEntry>;
+    };
+  };
 }
 
 export interface DirectApnsDeliveryResult {
@@ -66,6 +90,12 @@ export interface DirectApnsClient {
     readonly environment: DirectApnsEnvironment;
     readonly bundleId: string;
     readonly request: DirectApnsPushNotificationRequest;
+    readonly nowSeconds?: number;
+  }) => Effect.Effect<DirectApnsDeliveryResult>;
+  readonly sendSilentDismissNotification: (input: {
+    readonly environment: DirectApnsEnvironment;
+    readonly bundleId: string;
+    readonly request: DirectApnsSilentDismissRequest;
     readonly nowSeconds?: number;
   }) => Effect.Effect<DirectApnsDeliveryResult>;
   readonly close: () => void;
@@ -211,6 +241,28 @@ export function makeLiveActivityRequest(
   return request;
 }
 
+function fnv1a64Hex(value: string): string {
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  const bytes = new TextEncoder().encode(value);
+  for (const byte of bytes) {
+    hash ^= BigInt(byte);
+    hash = (hash * prime) & mask;
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
+export function alertCollapseId(environmentId: string, threadId: string): string {
+  // APNs caps apns-collapse-id at 64 bytes; replacing older banners per thread prevents lockscreen stacks.
+  return `alert-${fnv1a64Hex(`${environmentId}\0${threadId}`)}`;
+}
+
+export function dismissSyncCollapseId(environmentId: string): string {
+  // One per-environment collapse ID coalesces rapid dismissals while each payload carries recent dismissals.
+  return `dismiss-sync-${fnv1a64Hex(environmentId)}`;
+}
+
 export function makePushNotificationRequest(input: {
   readonly token: string;
   readonly notification: DirectApnsNotificationPayload;
@@ -222,6 +274,7 @@ export function makePushNotificationRequest(input: {
   return {
     token: input.token,
     priority: "10",
+    collapseId: alertCollapseId(input.notification.environmentId, input.notification.threadId),
     payload: {
       aps: {
         alert: {
@@ -236,6 +289,44 @@ export function makePushNotificationRequest(input: {
         environmentId: input.notification.environmentId,
         threadId: input.notification.threadId,
         deepLink: input.notification.deepLink,
+        ...(input.notification.phase ? { phase: input.notification.phase } : {}),
+        ...(input.notification.updatedAt ? { updatedAt: input.notification.updatedAt } : {}),
+      },
+    },
+  };
+}
+
+export function makeSilentDismissRequest(input: {
+  readonly token: string;
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly reason: "visited" | "handled";
+  readonly dismissedAt: string;
+  readonly dismissals?: ReadonlyArray<DirectApnsDismissEntry>;
+}): DirectApnsSilentDismissRequest {
+  const dismissals =
+    input.dismissals && input.dismissals.length > 0
+      ? input.dismissals
+      : [
+          {
+            environmentId: input.environmentId,
+            threadId: input.threadId,
+            dismissedAt: input.dismissedAt,
+          },
+        ];
+  return {
+    token: input.token,
+    collapseId: dismissSyncCollapseId(input.environmentId),
+    payload: {
+      aps: {
+        "content-available": 1,
+      },
+      t3Dismiss: {
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+        reason: input.reason,
+        dismissedAt: input.dismissedAt,
+        dismissals,
       },
     },
   };
@@ -416,54 +507,77 @@ export function createDirectApnsClient(
   const ownedTransport = options?.transport ? null : createNodeHttp2Transport();
   const transport = options?.transport ?? ownedTransport!;
 
-  const sendLiveActivity: DirectApnsClient["sendLiveActivity"] = Effect.fn(
-    "directApnsClient.sendLiveActivity",
-  )(function* (input) {
+  const sendApnsRequest = Effect.fn("directApnsClient.sendApnsRequest")(function* (input: {
+    readonly environment: DirectApnsEnvironment;
+    readonly token: string;
+    readonly pushType: "liveactivity" | "alert" | "background";
+    readonly topic: string;
+    readonly priority: "5" | "10";
+    readonly collapseId?: string;
+    readonly payload: unknown;
+    readonly nowSeconds?: number;
+  }) {
     const nowSeconds = input.nowSeconds ?? Math.floor((yield* Clock.currentTimeMillis) / 1_000);
     const jwt = getJwt(nowSeconds);
-    const body = serializeJsonBody(input.request.payload);
-    const result = yield* Effect.promise(() =>
+    const body = serializeJsonBody(input.payload);
+    return yield* Effect.promise(() =>
       transport.send({
         environment: input.environment,
-        path: `/3/device/${input.request.token}`,
+        path: `/3/device/${input.token}`,
         headers: {
           authorization: `bearer ${jwt}`,
-          "apns-priority": input.request.priority,
-          "apns-push-type": "liveactivity",
-          "apns-topic": `${input.bundleId}.push-type.liveactivity`,
+          "apns-priority": input.priority,
+          "apns-push-type": input.pushType,
+          "apns-topic": input.topic,
+          ...(input.collapseId ? { "apns-collapse-id": input.collapseId } : {}),
         },
         body,
       }),
     );
-    return result;
   });
 
-  const sendPushNotification: DirectApnsClient["sendPushNotification"] = Effect.fn(
-    "directApnsClient.sendPushNotification",
-  )(function* (input) {
-    const nowSeconds = input.nowSeconds ?? Math.floor((yield* Clock.currentTimeMillis) / 1_000);
-    const jwt = getJwt(nowSeconds);
-    const body = serializeJsonBody(input.request.payload);
-    const result = yield* Effect.promise(() =>
-      transport.send({
-        environment: input.environment,
-        path: `/3/device/${input.request.token}`,
-        headers: {
-          authorization: `bearer ${jwt}`,
-          "apns-priority": input.request.priority,
-          "apns-push-type": "alert",
-          "apns-topic": input.bundleId,
-        },
-        body,
-      }),
-    );
-    return result;
-  });
+  const sendLiveActivity: DirectApnsClient["sendLiveActivity"] = (input) =>
+    sendApnsRequest({
+      environment: input.environment,
+      token: input.request.token,
+      pushType: "liveactivity",
+      topic: `${input.bundleId}.push-type.liveactivity`,
+      priority: input.request.priority,
+      payload: input.request.payload,
+      ...(input.nowSeconds !== undefined ? { nowSeconds: input.nowSeconds } : {}),
+    });
+
+  const sendPushNotification: DirectApnsClient["sendPushNotification"] = (input) =>
+    sendApnsRequest({
+      environment: input.environment,
+      token: input.request.token,
+      pushType: "alert",
+      topic: input.bundleId,
+      priority: input.request.priority,
+      collapseId: input.request.collapseId,
+      payload: input.request.payload,
+      ...(input.nowSeconds !== undefined ? { nowSeconds: input.nowSeconds } : {}),
+    });
+
+  const sendSilentDismissNotification: DirectApnsClient["sendSilentDismissNotification"] = (
+    input,
+  ) =>
+    sendApnsRequest({
+      environment: input.environment,
+      token: input.request.token,
+      pushType: "background",
+      topic: input.bundleId,
+      priority: "5",
+      collapseId: input.request.collapseId,
+      payload: input.request.payload,
+      ...(input.nowSeconds !== undefined ? { nowSeconds: input.nowSeconds } : {}),
+    });
 
   return {
     getJwt,
     sendLiveActivity,
     sendPushNotification,
+    sendSilentDismissNotification,
     close: () => {
       transport.close?.();
     },

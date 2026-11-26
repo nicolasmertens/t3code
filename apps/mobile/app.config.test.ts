@@ -32,4 +32,5 @@ it.each([
   expect(config.android?.package).toBe(identifier);
   expect(config.ios?.appleTeamId).toBe("33QSRBWAD4");
   expect(config.ios?.associatedDomains).toEqual([]);
+  expect(config.ios?.infoPlist?.UIBackgroundModes).toEqual(["audio", "remote-notification"]);
 });

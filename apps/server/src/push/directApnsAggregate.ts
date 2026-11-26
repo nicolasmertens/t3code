@@ -223,16 +223,6 @@ function isFreshTerminalNotification(updatedAt: string, nowMs: number): boolean 
   );
 }
 
-interface TransitionInput {
-  readonly previousAggregate: RelayAgentActivityAggregateState | null;
-  readonly nextAggregate: RelayAgentActivityAggregateState;
-  readonly preferences: RelayAgentAwarenessPreferences | null;
-}
-
-function rowKey(row: RelayAgentActivityAggregateRow): string {
-  return JSON.stringify([row.environmentId, row.threadId]);
-}
-
 function isAttentionPhase(phase: string): boolean {
   return phase === "waiting_for_approval" || phase === "waiting_for_input";
 }
@@ -256,39 +246,40 @@ function alertAllowedForPhase(
   }
 }
 
-export function attentionTransitionRows(
-  input: TransitionInput,
-): ReadonlyArray<RelayAgentActivityAggregateRow> {
-  if (input.previousAggregate === null) return [];
-  const previouslyAttention = new Set(
-    input.previousAggregate.activities.filter((row) => isAttentionPhase(row.phase)).map(rowKey),
-  );
-  return input.nextAggregate.activities.filter(
-    (row) =>
-      isAttentionPhase(row.phase) &&
-      !previouslyAttention.has(rowKey(row)) &&
-      alertAllowedForPhase(input.preferences, row.phase),
-  );
+export function threadNotificationTransition(input: {
+  readonly previousState: RelayAgentActivityState | null;
+  readonly nextState: RelayAgentActivityState | null;
+  readonly preferences: RelayAgentAwarenessPreferences | null;
+  readonly nowMs: number;
+}): RelayAgentActivityAggregateRow | null {
+  const { previousState, nextState } = input;
+  if (nextState === null) return null;
+  if (!alertAllowedForPhase(input.preferences, nextState.phase)) return null;
+
+  if (isAttentionPhase(nextState.phase)) {
+    const shouldAlert =
+      previousState !== null
+        ? previousState.phase !== nextState.phase
+        : isFreshTerminalNotification(nextState.updatedAt, input.nowMs);
+    return shouldAlert ? aggregateRowForState(nextState) : null;
+  }
+
+  if (nextState.phase === "completed" || nextState.phase === "failed") {
+    const wasTerminal = previousState?.phase === "completed" || previousState?.phase === "failed";
+    if (!wasTerminal && isFreshTerminalNotification(nextState.updatedAt, input.nowMs)) {
+      return aggregateRowForState(nextState);
+    }
+  }
+  return null;
 }
 
-export function terminalTransitionRows(
-  input: TransitionInput & { readonly nowMs: number; readonly includeUnobserved?: boolean },
-): ReadonlyArray<RelayAgentActivityAggregateRow> {
-  if (input.previousAggregate === null) return [];
-  const previousPhases = new Map(
-    input.previousAggregate.activities.map((row) => [rowKey(row), row.phase]),
-  );
-  return input.nextAggregate.activities.filter((row) => {
-    if (row.phase !== "completed" && row.phase !== "failed") return false;
-    const previousPhase = previousPhases.get(rowKey(row));
-    return (
-      (input.includeUnobserved || previousPhase !== undefined) &&
-      previousPhase !== "completed" &&
-      previousPhase !== "failed" &&
-      alertAllowedForPhase(input.preferences, row.phase) &&
-      isFreshTerminalNotification(row.updatedAt, input.nowMs)
-    );
-  });
+export function shouldDismissThreadNotification(input: {
+  readonly previousState: RelayAgentActivityState | null;
+  readonly nextState: RelayAgentActivityState | null;
+}): boolean {
+  if (input.nextState === null) return true;
+  if (input.nextState.phase === "running" || input.nextState.phase === "starting") return true;
+  return false;
 }
 
 export function alertForActivityRows(

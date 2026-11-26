@@ -1,8 +1,6 @@
-function dataFromNotificationResponse(response: unknown): Record<string, unknown> | null {
-  if (typeof response !== "object" || response === null) {
-    return null;
-  }
-  const notification = (response as { readonly notification?: unknown }).notification;
+export function extractNotificationPayloadData(
+  notification: unknown,
+): Record<string, unknown> | null {
   if (typeof notification !== "object" || notification === null) {
     return null;
   }
@@ -16,6 +14,15 @@ function dataFromNotificationResponse(response: unknown): Record<string, unknown
   }
   const data = (content as { readonly data?: unknown }).data;
   return typeof data === "object" && data !== null ? (data as Record<string, unknown>) : null;
+}
+
+function dataFromNotificationResponse(response: unknown): Record<string, unknown> | null {
+  if (typeof response !== "object" || response === null) {
+    return null;
+  }
+  return extractNotificationPayloadData(
+    (response as { readonly notification?: unknown }).notification,
+  );
 }
 
 function identifierFromNotificationResponse(response: unknown): string | null {

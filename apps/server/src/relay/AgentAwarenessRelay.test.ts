@@ -1268,6 +1268,7 @@ it.effect("publishes to DirectApnsService even when relay link secrets are absen
           Effect.sync(() => {
             directPublished.push(state);
           }),
+        dismissThreadNotifications: () => Effect.void,
       }),
     });
     yield* relay.publishThread(THREAD_ID);
@@ -1275,5 +1276,103 @@ it.effect("publishes to DirectApnsService even when relay link secrets are absen
     assert.equal(directPublished.length, 1);
     assert.equal(directPublished[0]?.threadId, THREAD_ID);
     assert.equal(directPublished[0]?.phase, "running");
+  }),
+);
+
+it.effect("triggers DirectApnsService silent dismissal on visited and snoozed events", () =>
+  Effect.gen(function* () {
+    const dismissals: Array<{ readonly threadId: ThreadId; readonly reason: string }> = [];
+    const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+    const pulls = yield* Queue.unbounded<void>();
+    const { relay } = yield* makeTestRelay({
+      linked: false,
+      domainEvents: Stream.fromEffectRepeat(
+        Queue.offer(pulls, undefined).pipe(Effect.andThen(Queue.take(events))),
+      ),
+      directApns: DirectApnsService.DirectApnsService.of({
+        isConfigured: true,
+        registerDevice: () => Effect.succeed({ ok: true as const }),
+        unregisterDevice: () => Effect.succeed({ ok: true as const }),
+        registerLiveActivity: () => Effect.succeed({ ok: true as const }),
+        getSnapshot: () => Effect.succeed({ aggregate: null }),
+        publishThreadState: () => Effect.void,
+        dismissThreadNotifications: ({ threadId, reason }) =>
+          Effect.sync(() => {
+            dismissals.push({ threadId, reason });
+          }),
+      }),
+    });
+    yield* relay.start();
+    yield* Queue.take(pulls);
+    const now = DateTime.makeUnsafe(NOW);
+    const baseThread = {
+      createdBy: "user",
+      creationSource: "web",
+      id: THREAD_ID,
+      projectId: PROJECT_ID,
+      title: "Thread",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test-model" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      activeProviderThreadId: null,
+      lineage: { rootThreadId: THREAD_ID, parentThreadId: null, relationshipToParent: null },
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: now,
+      deletedAt: null,
+    } as const;
+    const emitEvent = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
+      yield* Queue.offer(events, event);
+      yield* Queue.take(pulls);
+      yield* relay.drain;
+    });
+    yield* emitEvent({
+      id: EventId.make("event:dismiss-visited"),
+      type: "thread.visited",
+      threadId: THREAD_ID,
+      occurredAt: now,
+      payload: baseThread,
+    });
+    yield* emitEvent({
+      id: EventId.make("event:dismiss-snoozed"),
+      type: "thread.snoozed",
+      threadId: THREAD_ID,
+      occurredAt: now,
+      payload: { ...baseThread, snoozedAt: now, snoozedUntil: null },
+    });
+    assert.deepEqual(dismissals, [
+      { threadId: THREAD_ID, reason: "visited" },
+      { threadId: THREAD_ID, reason: "handled" },
+    ]);
+  }),
+);
+
+it.effect("suppresses terminal completion alert when thread was already visited", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe(NOW)));
+    const { relay, currentShell, publications } = yield* makeTestRelay();
+    yield* relay.publishThread(THREAD_ID);
+    yield* Ref.set(
+      currentShell,
+      shell({
+        status: "completed",
+        latestRunCompletedAt: DateTime.makeUnsafe("2026-09-04T12:00:01.000Z"),
+        lastVisitedAt: DateTime.makeUnsafe("2026-09-04T12:00:02.000Z"),
+      }),
+    );
+    yield* relay.publishThread(THREAD_ID);
+    yield* TestClock.adjust("5 seconds");
+    yield* relay.drain;
+    assert.deepEqual(
+      publications.map((publication) => publication.state?.phase ?? null),
+      ["running", null],
+    );
   }),
 );

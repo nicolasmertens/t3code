@@ -153,6 +153,7 @@ let relayTokenProvider: (() => Promise<string | null>) | null = null;
 let relayTokenProviderIdentity: string | null = null;
 let directPushActive = false;
 let directPushIdentity: string | null = null;
+let promptedDirectPushPermissions = false;
 let deviceRegistrationGeneration = 0;
 let activeDeviceRegistration: {
   readonly input: DeviceRegistrationInput;
@@ -326,6 +327,7 @@ export function deactivateDirectPushAgentAwareness(): void {
   }
   directPushActive = false;
   directPushIdentity = null;
+  promptedDirectPushPermissions = false;
   deviceRegistrationGeneration++;
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;
@@ -379,7 +381,7 @@ const nativePushTokenRegistration = Effect.fn("remoteRegistration.nativePushToke
     if (!canRegisterPushNotifications() || !supportsAgentAwarenessPush()) {
       return { notificationsEnabled: false, pushToken: null, notificationPermissionGranted: false };
     }
-    const permissions = yield* Effect.tryPromise({
+    let permissions = yield* Effect.tryPromise({
       try: () => Notifications.getPermissionsAsync(),
       catch: (cause) =>
         new AgentAwarenessOperationError({
@@ -387,6 +389,31 @@ const nativePushTokenRegistration = Effect.fn("remoteRegistration.nativePushToke
           cause,
         }),
     });
+    if (
+      directPushActive &&
+      Platform.OS === "ios" &&
+      !permissions.granted &&
+      permissions.status === "undetermined" &&
+      permissions.canAskAgain &&
+      !promptedDirectPushPermissions
+    ) {
+      promptedDirectPushPermissions = true;
+      permissions = yield* Effect.tryPromise({
+        try: () =>
+          Notifications.requestPermissionsAsync({
+            ios: {
+              allowAlert: true,
+              allowBadge: true,
+              allowSound: true,
+            },
+          }),
+        catch: (cause) =>
+          new AgentAwarenessOperationError({
+            operation: "read-notification-permissions",
+            cause,
+          }),
+      });
+    }
     // Android FCM data delivery is independent of notification presentation permission.
     if (!permissions.granted && Platform.OS !== "android") {
       return { notificationsEnabled: false, pushToken: null, notificationPermissionGranted: false };
@@ -1054,6 +1081,7 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   relayTokenProviderIdentity = null;
   directPushActive = false;
   directPushIdentity = null;
+  promptedDirectPushPermissions = false;
   deviceRegistrationGeneration++;
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;

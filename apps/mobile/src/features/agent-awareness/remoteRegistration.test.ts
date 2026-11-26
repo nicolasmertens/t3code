@@ -132,6 +132,7 @@ vi.mock("expo-notifications", () => ({
   addPushTokenListener: vi.fn(() => ({ remove: vi.fn() })),
   getDevicePushTokenAsync: vi.fn(() => Promise.resolve({ type: "ios", data: "apns-token" })),
   getPermissionsAsync: vi.fn(() => Promise.resolve({ granted: true })),
+  requestPermissionsAsync: vi.fn(() => Promise.resolve({ granted: true, canAskAgain: true })),
 }));
 
 vi.mock("expo-crypto", () => ({
@@ -318,6 +319,11 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     vi.mocked(Notifications.getPermissionsAsync).mockResolvedValue({
       granted: true,
     } as Awaited<ReturnType<typeof Notifications.getPermissionsAsync>>);
+    vi.mocked(Notifications.requestPermissionsAsync).mockReset();
+    vi.mocked(Notifications.requestPermissionsAsync).mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as Awaited<ReturnType<typeof Notifications.requestPermissionsAsync>>);
     vi.mocked(Notifications.getNotificationChannelAsync).mockResolvedValue(null);
     vi.unstubAllGlobals();
     vi.stubGlobal("__DEV__", false);
@@ -1402,6 +1408,72 @@ describe("makeRelayDeviceRegistrationRequest", () => {
           deactivateDirectPushAgentAwareness();
           expect(getAgentAwarenessRegistrationStatus()).toBe("unknown");
           expect(publishWidgetMock).toHaveBeenLastCalledWith({ kind: "signed-out" });
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              __resetDirectPushTargetsForTest();
+              __resetAgentAwarenessRemoteRegistrationForTest();
+            }),
+          ),
+          Effect.provide(layerRelayTest),
+        );
+      },
+    );
+
+    it.effect(
+      "prompts iOS notification permission once during direct-push activation when undetermined",
+      () => {
+        Constants.expoConfig!.extra = { appVariant: "production" };
+        const requests: Array<{ readonly url: string; readonly body: unknown }> = [];
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            requests.push({
+              url: String(input),
+              body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
+            });
+            return new Response(JSON.stringify({ ok: true }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }),
+        );
+        vi.mocked(Notifications.getPermissionsAsync).mockResolvedValue({
+          granted: false,
+          status: "undetermined",
+          canAskAgain: true,
+        } as Awaited<ReturnType<typeof Notifications.getPermissionsAsync>>);
+        vi.mocked(Notifications.requestPermissionsAsync).mockResolvedValue({
+          granted: true,
+          status: "granted",
+          canAskAgain: true,
+        } as Awaited<ReturnType<typeof Notifications.requestPermissionsAsync>>);
+
+        setDirectPushTargets([
+          {
+            environmentId: "env-direct" as EnvironmentId,
+            httpBaseUrl: "https://direct.ts.net",
+            httpAuthorization: { _tag: "Bearer", token: "direct-tok" },
+            bearerToken: "direct-tok",
+          },
+        ]);
+        activateDirectPushAgentAwareness("env-direct@https://direct.ts.net");
+
+        return Effect.gen(function* () {
+          yield* refreshAgentAwarenessRegistration();
+          expect(Notifications.requestPermissionsAsync).toHaveBeenCalledTimes(1);
+          expect(requests.at(-1)?.body).toMatchObject({
+            pushToken: "apns-token",
+            preferences: { notificationsEnabled: true },
+          });
+
+          vi.mocked(Notifications.requestPermissionsAsync).mockResolvedValue({
+            granted: false,
+            status: "undetermined",
+            canAskAgain: true,
+          } as Awaited<ReturnType<typeof Notifications.requestPermissionsAsync>>);
+          yield* refreshAgentAwarenessRegistration();
+          expect(Notifications.requestPermissionsAsync).toHaveBeenCalledTimes(1);
         }).pipe(
           Effect.ensuring(
             Effect.sync(() => {

@@ -276,8 +276,8 @@ const config: ExpoConfig = {
       // Built with the iOS 27 SDK, only view controllers can hide or style the status bar.
       UIViewControllerBasedStatusBarAppearance: true,
       NSPhotoLibraryAddUsageDescription: "Allow Browne to save images to your photo library.",
-      // System picture in picture needs background audio to start and survive outside the app.
-      UIBackgroundModes: ["audio"],
+      // System picture in picture needs background audio; silent remote pushes dismiss stale notifications.
+      UIBackgroundModes: ["audio", "remote-notification"],
       ITSAppUsesNonExemptEncryption: false,
       // Capture builds disable multitasking because iPadOS otherwise ignores orientation requests.
       ...(process.env.T3_SHOWCASE_CAPTURE_BUILD === "1"

@@ -1,6 +1,6 @@
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type {
-  RelayAgentActivityAggregateState,
+  RelayAgentActivityAggregateRow,
   RelayAgentActivitySnapshotResponse,
   RelayAgentActivityState,
   RelayAgentAwarenessPreferences,
@@ -20,23 +20,28 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerConfig from "../config.ts";
 import {
   alertForActivityRows,
-  attentionTransitionRows,
   isTerminalPhase,
   makeAggregateState,
   notificationForActivity,
-  terminalTransitionRows,
+  shouldDismissThreadNotification,
+  threadNotificationTransition,
 } from "./directApnsAggregate.ts";
 import {
   createDirectApnsClient,
   isPermanentInvalidToken,
   makeLiveActivityRequest,
   makePushNotificationRequest,
+  makeSilentDismissRequest,
   type DirectApnsClient,
+  type DirectApnsDismissEntry,
   type DirectApnsEnvironment,
 } from "./directApnsClient.ts";
 import { loadDirectApnsConfig, type DirectApnsConfig } from "./directApnsConfig.ts";
 
 const DEVICES_FILE_NAME = "direct-apns-devices.json";
+const ACTIVE_NOTIFICATION_MAX_ENTRIES = 100;
+const RECENT_DISMISSAL_MAX_ENTRIES = 25;
+const ACTIVE_NOTIFICATION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
 const StoredPreferencesSchema = Schema.Struct({
   liveActivitiesEnabled: Schema.Boolean,
@@ -46,6 +51,22 @@ const StoredPreferencesSchema = Schema.Struct({
   notifyOnCompletion: Schema.Boolean,
   notifyOnFailure: Schema.Boolean,
 });
+
+const StoredActiveNotificationSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  phase: Schema.String,
+  updatedAt: Schema.String,
+  sentAt: Schema.String,
+});
+type StoredActiveNotification = typeof StoredActiveNotificationSchema.Type;
+
+const StoredRecentDismissalSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  dismissedAt: Schema.String,
+});
+type StoredRecentDismissal = typeof StoredRecentDismissalSchema.Type;
 
 const StoredDirectApnsDeviceSchema = Schema.Struct({
   deviceId: Schema.String,
@@ -59,6 +80,8 @@ const StoredDirectApnsDeviceSchema = Schema.Struct({
   pushToken: Schema.optional(Schema.String),
   activityPushToken: Schema.optional(Schema.String),
   pushToStartToken: Schema.optional(Schema.String),
+  activeNotifications: Schema.optional(Schema.Array(StoredActiveNotificationSchema)),
+  recentDismissals: Schema.optional(Schema.Array(StoredRecentDismissalSchema)),
   preferences: StoredPreferencesSchema,
   updatedAt: Schema.String,
 });
@@ -92,8 +115,141 @@ export class DirectApnsService extends Context.Service<
       readonly threadId: ThreadId;
       readonly state: RelayAgentActivityState | null;
     }) => Effect.Effect<void>;
+    readonly dismissThreadNotifications: (input: {
+      readonly environmentId: EnvironmentId;
+      readonly threadId: ThreadId;
+      readonly reason: "visited" | "handled";
+    }) => Effect.Effect<void>;
   }
 >()("t3/push/DirectApnsService") {}
+
+function pruneActiveNotifications(
+  entries: ReadonlyArray<StoredActiveNotification> | undefined,
+  nowMs: number,
+): ReadonlyArray<StoredActiveNotification> {
+  if (!entries || entries.length === 0) return [];
+  const cutoffMs = nowMs - ACTIVE_NOTIFICATION_TTL_MS;
+  return entries
+    .filter((entry) => {
+      const sentMs = Date.parse(entry.sentAt);
+      return Number.isFinite(sentMs) && sentMs >= cutoffMs;
+    })
+    .slice(-ACTIVE_NOTIFICATION_MAX_ENTRIES);
+}
+
+function pruneRecentDismissals(
+  entries: ReadonlyArray<StoredRecentDismissal> | undefined,
+  nowMs: number,
+): ReadonlyArray<StoredRecentDismissal> {
+  if (!entries || entries.length === 0) return [];
+  const cutoffMs = nowMs - ACTIVE_NOTIFICATION_TTL_MS;
+  return entries
+    .filter((entry) => {
+      const dismissedMs = Date.parse(entry.dismissedAt);
+      return Number.isFinite(dismissedMs) && dismissedMs >= cutoffMs;
+    })
+    .slice(-RECENT_DISMISSAL_MAX_ENTRIES);
+}
+
+function removeThreadNotification(
+  entries: ReadonlyArray<StoredActiveNotification> | undefined,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  nowMs: number,
+): {
+  readonly matched: boolean;
+  readonly remaining: ReadonlyArray<StoredActiveNotification>;
+} {
+  const pruned = pruneActiveNotifications(entries, nowMs);
+  const remaining = pruned.filter(
+    (entry) => !(entry.environmentId === environmentId && entry.threadId === threadId),
+  );
+  return {
+    matched:
+      entries?.some(
+        (entry) => entry.environmentId === environmentId && entry.threadId === threadId,
+      ) ?? false,
+    remaining,
+  };
+}
+
+function upsertThreadNotification(
+  entries: ReadonlyArray<StoredActiveNotification> | undefined,
+  nextEntry: StoredActiveNotification,
+  nowMs: number,
+): ReadonlyArray<StoredActiveNotification> {
+  const { remaining } = removeThreadNotification(
+    entries,
+    nextEntry.environmentId,
+    nextEntry.threadId,
+    nowMs,
+  );
+  return [...remaining, nextEntry].slice(-ACTIVE_NOTIFICATION_MAX_ENTRIES);
+}
+
+function removeRecentDismissal(
+  entries: ReadonlyArray<StoredRecentDismissal> | undefined,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  nowMs: number,
+): ReadonlyArray<StoredRecentDismissal> {
+  return pruneRecentDismissals(entries, nowMs).filter(
+    (entry) => !(entry.environmentId === environmentId && entry.threadId === threadId),
+  );
+}
+
+function upsertRecentDismissal(
+  entries: ReadonlyArray<StoredRecentDismissal> | undefined,
+  nextEntry: StoredRecentDismissal,
+  nowMs: number,
+): ReadonlyArray<StoredRecentDismissal> {
+  const remaining = removeRecentDismissal(
+    entries,
+    nextEntry.environmentId,
+    nextEntry.threadId,
+    nowMs,
+  );
+  return [...remaining, nextEntry].slice(-RECENT_DISMISSAL_MAX_ENTRIES);
+}
+
+function hasRecentDismissal(
+  entries: ReadonlyArray<StoredRecentDismissal> | undefined,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  nowMs: number,
+): boolean {
+  return pruneRecentDismissals(entries, nowMs).some(
+    (entry) => entry.environmentId === environmentId && entry.threadId === threadId,
+  );
+}
+
+function hasRecordedNotification(
+  device: StoredDirectApnsDevice,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  phase: string,
+  updatedAt: string,
+): boolean {
+  return (
+    device.activeNotifications?.some(
+      (entry) =>
+        entry.environmentId === environmentId &&
+        entry.threadId === threadId &&
+        entry.phase === phase &&
+        entry.updatedAt === updatedAt,
+    ) ?? false
+  );
+}
+
+function isAttentionOrTerminalState(state: RelayAgentActivityState | undefined): boolean {
+  if (!state) return false;
+  return (
+    state.phase === "waiting_for_approval" ||
+    state.phase === "waiting_for_input" ||
+    state.phase === "completed" ||
+    state.phase === "failed"
+  );
+}
 
 const DEFAULT_PREFERENCES: RelayAgentAwarenessPreferences = {
   liveActivitiesEnabled: true,
@@ -134,7 +290,6 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
   const publishLock = Semaphore.makeUnsafe(1);
   const devices = new Map<string, StoredDirectApnsDevice>();
   const threadStates = new Map<ThreadId, RelayAgentActivityState>();
-  let previousAggregate: RelayAgentActivityAggregateState | null = null;
 
   const loadPersistedDevices = Effect.gen(function* () {
     const exists = yield* fs.exists(devicesPath).pipe(Effect.orElseSucceed(() => false));
@@ -302,6 +457,12 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
             ? { activityPushToken: existing.activityPushToken }
             : {}),
           ...(pushToStartToken !== undefined ? { pushToStartToken } : {}),
+          ...(existing?.activeNotifications !== undefined
+            ? { activeNotifications: existing.activeNotifications }
+            : {}),
+          ...(existing?.recentDismissals !== undefined
+            ? { recentDismissals: existing.recentDismissals }
+            : {}),
           preferences: request.preferences,
           updatedAt: nowIso,
         };
@@ -436,6 +597,171 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
     },
   );
 
+  const sendDismissForTargets = Effect.fn("DirectApnsService.sendDismissForTargets")(
+    function* (input: {
+      readonly targets: ReadonlyArray<{
+        readonly deviceId: string;
+        readonly token: string;
+        readonly bundleId: string;
+        readonly apsEnvironment: DirectApnsEnvironment;
+        readonly dismissals: ReadonlyArray<DirectApnsDismissEntry>;
+      }>;
+      readonly environmentId: EnvironmentId;
+      readonly threadId: ThreadId;
+      readonly reason: "visited" | "handled";
+      readonly dismissedAt: string;
+    }) {
+      if (client === null || input.targets.length === 0) return;
+      const invalidPushTokens: Array<{ readonly deviceId: string; readonly token: string }> = [];
+      yield* Effect.forEach(
+        input.targets,
+        (target) =>
+          Effect.gen(function* () {
+            const res = yield* client.sendSilentDismissNotification({
+              environment: target.apsEnvironment,
+              bundleId: target.bundleId,
+              request: makeSilentDismissRequest({
+                token: target.token,
+                environmentId: input.environmentId,
+                threadId: input.threadId,
+                reason: input.reason,
+                dismissedAt: input.dismissedAt,
+                dismissals: target.dismissals,
+              }),
+            });
+            if (!res.ok) {
+              yield* Effect.logWarning("Direct APNs silent dismiss failed", {
+                deviceId: target.deviceId,
+                environmentId: input.environmentId,
+                threadId: input.threadId,
+                reason: input.reason,
+                status: res.status,
+                reasonText: res.reason,
+              });
+              if (isPermanentInvalidToken(res)) {
+                invalidPushTokens.push({ deviceId: target.deviceId, token: target.token });
+              }
+            }
+          }),
+        { concurrency: "unbounded" },
+      );
+      yield* pruneInvalidTokens(invalidPushTokens, []);
+    },
+  );
+
+  const collectAndClearDismissTargets = Effect.fn(
+    "DirectApnsService.collectAndClearDismissTargets",
+  )(function* (input: {
+    readonly environmentId: EnvironmentId;
+    readonly threadId: ThreadId;
+    readonly nowMs: number;
+    readonly nowIso: string;
+    readonly allowUnrecordedOnce: boolean;
+  }) {
+    const dismissTargets: Array<{
+      readonly deviceId: string;
+      readonly token: string;
+      readonly bundleId: string;
+      readonly apsEnvironment: DirectApnsEnvironment;
+      readonly dismissals: ReadonlyArray<DirectApnsDismissEntry>;
+    }> = [];
+    yield* deviceLock.withPermit(
+      Effect.gen(function* () {
+        if (config === null) return;
+        let changed = false;
+        for (const device of devices.values()) {
+          if (device.platform !== "ios") continue;
+          const { matched, remaining } = removeThreadNotification(
+            device.activeNotifications,
+            input.environmentId,
+            input.threadId,
+            input.nowMs,
+          );
+          const alreadyDismissed = hasRecentDismissal(
+            device.recentDismissals,
+            input.environmentId,
+            input.threadId,
+            input.nowMs,
+          );
+          const shouldSend =
+            matched ||
+            (input.allowUnrecordedOnce &&
+              !alreadyDismissed &&
+              device.preferences.notificationsEnabled);
+          if (!shouldSend) continue;
+
+          const nextDismissals = upsertRecentDismissal(
+            device.recentDismissals,
+            {
+              environmentId: input.environmentId,
+              threadId: input.threadId,
+              dismissedAt: input.nowIso,
+            },
+            input.nowMs,
+          );
+          if (device.pushToken) {
+            dismissTargets.push({
+              deviceId: device.deviceId,
+              token: device.pushToken,
+              bundleId: device.bundleId ?? config.bundleId,
+              apsEnvironment: device.apsEnvironment ?? "production",
+              dismissals: nextDismissals,
+            });
+          }
+          const {
+            activeNotifications: _droppedActive,
+            recentDismissals: _droppedDismissals,
+            ...rest
+          } = device;
+          devices.set(device.deviceId, {
+            ...rest,
+            ...(remaining.length > 0 ? { activeNotifications: remaining } : {}),
+            ...(nextDismissals.length > 0 ? { recentDismissals: nextDismissals } : {}),
+          });
+          changed = true;
+        }
+        if (changed) {
+          yield* persistDevices();
+        }
+      }),
+    );
+    return dismissTargets;
+  });
+
+  const dismissThreadNotifications: DirectApnsService["Service"]["dismissThreadNotifications"] =
+    Effect.fn("DirectApnsService.dismissThreadNotifications")(function* (input) {
+      if (config === null || client === null) {
+        return;
+      }
+      yield* publishLock.withPermit(
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const nowMs = now.epochMilliseconds;
+          const nowIso = DateTime.formatIso(now);
+          const currentState = threadStates.get(input.threadId);
+          // Allow one unrecorded dismiss for explicit handled events (settled/snoozed/archived/deleted)
+          // or visits to threads currently tracked in an attention/terminal phase, clearing pre-upgrade
+          // banners without spamming APNs during active streaming visits.
+          const allowUnrecordedOnce =
+            input.reason === "handled" || isAttentionOrTerminalState(currentState);
+          const targets = yield* collectAndClearDismissTargets({
+            environmentId: input.environmentId,
+            threadId: input.threadId,
+            nowMs,
+            nowIso,
+            allowUnrecordedOnce,
+          });
+          yield* sendDismissForTargets({
+            targets,
+            environmentId: input.environmentId,
+            threadId: input.threadId,
+            reason: input.reason,
+            dismissedAt: nowIso,
+          });
+        }),
+      );
+    });
+
   const publishThreadState: DirectApnsService["Service"]["publishThreadState"] = Effect.fn(
     "DirectApnsService.publishThreadState",
   )(function* (input) {
@@ -445,9 +771,12 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
 
     yield* publishLock.withPermit(
       Effect.gen(function* () {
-        const nowMs = (yield* DateTime.now).epochMilliseconds;
+        const now = yield* DateTime.now;
+        const nowMs = now.epochMilliseconds;
+        const nowIso = DateTime.formatIso(now);
         const nowEpochSeconds = Math.floor(nowMs / 1_000);
 
+        const previousState = threadStates.get(input.threadId) ?? null;
         if (input.state === null) {
           threadStates.delete(input.threadId);
         } else {
@@ -462,11 +791,25 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
           nowMs,
           appTitle: config.appTitle,
         });
-        const prevAggregate = previousAggregate;
-        previousAggregate = nextAggregate;
+
+        const shouldDismiss = shouldDismissThreadNotification({
+          previousState,
+          nextState: input.state,
+        });
+        const dismissTargets = shouldDismiss
+          ? yield* collectAndClearDismissTargets({
+              environmentId: input.environmentId,
+              threadId: input.threadId,
+              nowMs,
+              nowIso,
+              // Only send unrecorded dismisses on transitions away from attention/terminal phases;
+              // starting a fresh thread from null -> running should not fire a silent dismiss.
+              allowUnrecordedOnce: isAttentionOrTerminalState(previousState ?? undefined),
+            })
+          : [];
 
         const targets = yield* deviceLock.withPermit(Effect.sync(snapshotRegisteredIosDevices));
-        if (targets.length === 0) {
+        if (targets.length === 0 && dismissTargets.length === 0) {
           return;
         }
 
@@ -474,6 +817,10 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
         const invalidPushTokens: Array<{ readonly deviceId: string; readonly token: string }> = [];
         const invalidActivityTokens: Array<{ readonly deviceId: string; readonly token: string }> =
           [];
+        const recordedNotifications: Array<{
+          readonly deviceId: string;
+          readonly entry: StoredActiveNotification;
+        }> = [];
 
         yield* Effect.forEach(
           targets,
@@ -482,50 +829,61 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
               const bundleId = device.bundleId ?? config.bundleId;
               const apsEnvironment: DirectApnsEnvironment = device.apsEnvironment ?? "production";
 
-              const attentionRows =
-                nextAggregate === null
-                  ? []
-                  : attentionTransitionRows({
-                      previousAggregate: prevAggregate,
-                      nextAggregate,
-                      preferences: device.preferences,
-                    });
-              const terminalRows =
-                nextAggregate === null
-                  ? []
-                  : terminalTransitionRows({
-                      previousAggregate: prevAggregate,
-                      nextAggregate,
-                      preferences: device.preferences,
-                      nowMs,
-                      includeUnobserved: prevAggregate !== null,
-                    });
+              const candidateRow = threadNotificationTransition({
+                previousState,
+                nextState: input.state,
+                preferences: device.preferences,
+                nowMs,
+              });
+              const notificationRow: RelayAgentActivityAggregateRow | null =
+                candidateRow !== null &&
+                !hasRecordedNotification(
+                  device,
+                  input.environmentId,
+                  input.threadId,
+                  candidateRow.phase,
+                  candidateRow.updatedAt,
+                )
+                  ? candidateRow
+                  : null;
 
               let sentStandardPush = false;
-              if (device.pushToken && device.preferences.notificationsEnabled) {
-                for (const row of [...attentionRows, ...terminalRows]) {
-                  const res = yield* client.sendPushNotification({
-                    environment: apsEnvironment,
-                    bundleId,
-                    request: makePushNotificationRequest({
-                      token: device.pushToken,
-                      notification: notificationForActivity(row),
-                    }),
+              if (
+                notificationRow !== null &&
+                device.pushToken &&
+                device.preferences.notificationsEnabled
+              ) {
+                const res = yield* client.sendPushNotification({
+                  environment: apsEnvironment,
+                  bundleId,
+                  request: makePushNotificationRequest({
+                    token: device.pushToken,
+                    notification: notificationForActivity(notificationRow),
+                  }),
+                });
+                if (res.ok) {
+                  sentStandardPush = true;
+                  recordedNotifications.push({
+                    deviceId: device.deviceId,
+                    entry: {
+                      environmentId: input.environmentId,
+                      threadId: input.threadId,
+                      phase: notificationRow.phase,
+                      updatedAt: notificationRow.updatedAt,
+                      sentAt: nowIso,
+                    },
                   });
-                  if (res.ok) {
-                    sentStandardPush = true;
-                  } else {
-                    yield* Effect.logWarning("Direct APNs push notification failed", {
+                } else {
+                  yield* Effect.logWarning("Direct APNs push notification failed", {
+                    deviceId: device.deviceId,
+                    status: res.status,
+                    reason: res.reason,
+                  });
+                  if (isPermanentInvalidToken(res)) {
+                    invalidPushTokens.push({
                       deviceId: device.deviceId,
-                      status: res.status,
-                      reason: res.reason,
+                      token: device.pushToken,
                     });
-                    if (isPermanentInvalidToken(res)) {
-                      invalidPushTokens.push({
-                        deviceId: device.deviceId,
-                        token: device.pushToken,
-                      });
-                    }
                   }
                 }
               }
@@ -533,7 +891,7 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
               if (device.activityPushToken && device.preferences.liveActivitiesEnabled) {
                 const liveActivityAlert = sentStandardPush
                   ? null
-                  : (alertForActivityRows(attentionRows) ?? alertForActivityRows(terminalRows));
+                  : alertForActivityRows(notificationRow ? [notificationRow] : []);
                 if (nextAggregate === null || nextAggregate.activeCount === 0) {
                   const res = yield* client.sendLiveActivity({
                     environment: apsEnvironment,
@@ -588,6 +946,48 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
           { concurrency: "unbounded" },
         );
 
+        yield* sendDismissForTargets({
+          targets: dismissTargets,
+          environmentId: input.environmentId,
+          threadId: input.threadId,
+          reason: "handled",
+          dismissedAt: nowIso,
+        });
+
+        if (recordedNotifications.length > 0) {
+          yield* deviceLock.withPermit(
+            Effect.gen(function* () {
+              let changed = false;
+              for (const recorded of recordedNotifications) {
+                const current = devices.get(recorded.deviceId);
+                if (!current) continue;
+                const nextRecentDismissals = removeRecentDismissal(
+                  current.recentDismissals,
+                  recorded.entry.environmentId,
+                  recorded.entry.threadId,
+                  nowMs,
+                );
+                const { recentDismissals: _droppedDismissals, ...rest } = current;
+                devices.set(recorded.deviceId, {
+                  ...rest,
+                  activeNotifications: upsertThreadNotification(
+                    current.activeNotifications,
+                    recorded.entry,
+                    nowMs,
+                  ),
+                  ...(nextRecentDismissals.length > 0
+                    ? { recentDismissals: nextRecentDismissals }
+                    : {}),
+                });
+                changed = true;
+              }
+              if (changed) {
+                yield* persistDevices();
+              }
+            }),
+          );
+        }
+
         yield* clearEndedActivityTokens(endedTokens);
         yield* pruneInvalidTokens(invalidPushTokens, invalidActivityTokens);
       }),
@@ -601,6 +1001,7 @@ export const make = Effect.fn("DirectApnsService.make")(function* (
     registerLiveActivity,
     getSnapshot,
     publishThreadState,
+    dismissThreadNotifications,
   });
 });
 

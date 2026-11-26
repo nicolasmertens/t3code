@@ -70,6 +70,23 @@ function eventThreadId(event: OrchestrationV2DomainEvent): ThreadId {
   return event.threadId;
 }
 
+function directApnsDismissReasonForEvent(
+  event: Pick<OrchestrationV2DomainEvent, "type">,
+): "visited" | "handled" | null {
+  switch (event.type) {
+    case "thread.visited":
+    case "thread.visit-recorded":
+      return "visited";
+    case "thread.snoozed":
+    case "thread.settled":
+    case "thread.archived":
+    case "thread.deleted":
+      return "handled";
+    default:
+      return null;
+  }
+}
+
 function isTurnItemPayload(
   payload: unknown,
 ): payload is Pick<OrchestrationV2TurnItem, "type" | "status"> {
@@ -366,9 +383,10 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
     state?.phase !== projectThreadAwarenessV2(awarenessInput)?.phase;
   return {
     projectId: input.thread.value.projectId,
-    state: snoozedCompletion(input.thread.value, state)
-      ? null
-      : sanitizeRelayAgentActivityState(state),
+    state:
+      snoozedCompletion(input.thread.value, state) || visitedTerminal(input.thread.value, state)
+        ? null
+        : sanitizeRelayAgentActivityState(state),
     subagentWait: childDrivesWait ? input.pendingSubagentRequest : null,
     reason: "snapshot",
   };
@@ -385,6 +403,25 @@ function snoozedCompletion(
     return false;
   }
   return isSnoozed(thread, completedAt);
+}
+
+// A terminal result the user already read (e.g. while watching the thread during the 5s hold)
+// should not fire a stale lockscreen push whose thread.visited event already passed.
+function visitedTerminal(
+  thread: AgentAwarenessThread,
+  state: { readonly phase: string } | null,
+): boolean {
+  if (
+    (state?.phase !== "completed" && state?.phase !== "failed") ||
+    thread.lastVisitedAt == null ||
+    thread.latestRunCompletedAt == null
+  ) {
+    return false;
+  }
+  return (
+    DateTime.toEpochMillis(thread.lastVisitedAt) >=
+    DateTime.toEpochMillis(thread.latestRunCompletedAt)
+  );
 }
 
 function terminalWorkSinceStart(thread: AgentAwarenessThread, startedAt: number): boolean {
@@ -1011,13 +1048,38 @@ export const make = Effect.gen(function* () {
       yield* forkParked(
         Stream.runForEach(threads.streamDomainEvents, (event) => {
           const threadId = eventThreadId(event);
+          const dismissReason = directApns !== null ? directApnsDismissReasonForEvent(event) : null;
+          const dismissEffect =
+            directApns !== null && dismissReason !== null
+              ? serverEnvironment.getEnvironmentId.pipe(
+                  Effect.flatMap((environmentId) =>
+                    directApns.dismissThreadNotifications({
+                      environmentId,
+                      threadId,
+                      reason: dismissReason,
+                    }),
+                  ),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("direct APNs dismiss failed for domain event", {
+                      eventType: event.type,
+                      threadId,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                )
+              : Effect.void;
           if (!shouldPublishAgentAwarenessEvent(event)) {
-            return Effect.void;
+            return dismissEffect;
           }
-          return Effect.logDebug("agent activity publishing queued thread publish", {
-            eventType: event.type,
-            threadId,
-          }).pipe(Effect.andThen(enqueueThreadPublish(threadId)));
+          return dismissEffect.pipe(
+            Effect.andThen(
+              Effect.logDebug("agent activity publishing queued thread publish", {
+                eventType: event.type,
+                threadId,
+              }),
+            ),
+            Effect.andThen(enqueueThreadPublish(threadId)),
+          );
         }),
       );
     },
