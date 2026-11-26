@@ -2,8 +2,10 @@ import type { ChatComposerProps } from "./ChatComposer";
 import type { PromptUltrathink } from "./TraitsPicker";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
+import { createModelSelection } from "@t3tools/shared/model";
 import { useGT, useMessages } from "gt-react";
 import { CircleAlertIcon } from "lucide-react";
+import { createPortal } from "react-dom";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerControl } from "./ComposerControl";
 import {
@@ -11,6 +13,8 @@ import {
   ComposerModelPicker,
   type RuntimeModeOption,
 } from "./ComposerFooterControls";
+import { DraftModelPillStrip } from "./DraftModelPillStrip";
+import { resolveDraftModelPills } from "./draftModelPills.logic";
 import {
   type EnvironmentId,
   type ModelSelection,
@@ -21,14 +25,17 @@ import {
 } from "@t3tools/contracts";
 import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { cn } from "~/lib/utils";
+import { useEnvironmentModelPreferences } from "../../hooks/useSettings";
 import { resolveComposerTraitsInput } from "./composerProviderState";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   ComposerEffortColumn,
   ComposerPickerFooter,
+  InlineComposerEffortControl,
   describeComposerEffort,
 } from "./ComposerModelEffort";
+import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import type { useComposerProviderModel } from "./useComposerProviderModel";
 import { resolveComposerControlsOwnership } from "./composerControlsOwnership";
 
@@ -87,6 +94,8 @@ export function ComposerControlsBar(props: {
   onModelPickerOpenChange: (open: boolean) => void;
   modelPickerIconClassName: string | undefined;
   getModelDisabledReason: ChatComposerProps["getModelDisabledReason"];
+  showDraftModelPills?: boolean;
+  draftModelStripHost?: HTMLDivElement | null;
 }) {
   const {
     environmentId,
@@ -148,6 +157,7 @@ export function ComposerControlsBar(props: {
   const controlSize = composerControlsCollapsed ? "xs" : "sm";
   const gt = useGT();
   const m = useMessages();
+  const { favorites } = useEnvironmentModelPreferences(environmentId);
   const applyThreadModelPick = useApplyThreadModelPick();
   const applyRouteThreadModelPick = useStableCallback(() => applyThreadModelPick(routeThreadRef));
   const traitsInput = resolveComposerTraitsInput({
@@ -165,6 +175,69 @@ export function ComposerControlsBar(props: {
     onPromptEdit,
   });
   const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize, m);
+  const activePickerInstanceId = providerCatalogPending
+    ? (activeThreadModelSelection?.instanceId ?? selectedInstanceId)
+    : selectedInstanceId;
+  const activePickerModel = providerCatalogPending
+    ? (activeThreadModelSelection?.model ?? selectedModelForPickerWithCustomFallback)
+    : selectedModelForPickerWithCustomFallback;
+  const draftModelStripHost = props.draftModelStripHost ?? null;
+  const draftModelPills =
+    props.showDraftModelPills &&
+    draftModelStripHost !== null &&
+    !showProviderUnavailable &&
+    !providerCatalogPending &&
+    !composerControlsCollapsed
+      ? resolveDraftModelPills({
+          favorites,
+          instanceEntries: providerInstanceEntries,
+          modelOptionsByInstance,
+          activeInstanceId: activePickerInstanceId,
+          activeModel: activePickerModel,
+          selectedModels: multipleModelsEnabled ? multipleModelSelections : null,
+          lockedProvider,
+          lockedContinuationGroupKey,
+          getModelDisabledReason,
+        })
+      : [];
+  const inlineDraftPillsActive = draftModelPills.length > 0 && draftModelStripHost !== null;
+  const handleSelectDraftPill = useStableCallback(
+    (instanceId: ProviderInstanceId, model: string) => {
+      onMultipleModelSelectionsChange(null);
+      onProviderModelSelect(instanceId, model, { focusComposer: false });
+    },
+  );
+  const handleToggleDraftPill = useStableCallback(
+    (instanceId: ProviderInstanceId, model: string) => {
+      if (!multipleModelsEnabled) return;
+      const current = multipleModelSelections ?? [selectedModelSelection];
+      const matchesModel = (selection: ModelSelection) => {
+        if (selection.instanceId !== instanceId) return false;
+        const entry = providerInstanceEntries.find(
+          (item) => item.instanceId === selection.instanceId,
+        );
+        const resolvedModel = resolveModelPickerSelectedModel({
+          driverKind: entry?.driverKind,
+          model: selection.model,
+          options: modelOptionsByInstance.get(selection.instanceId) ?? [],
+        });
+        return (resolvedModel?.slug ?? selection.model) === model;
+      };
+      const exists = current.some(matchesModel);
+      const next = exists
+        ? current.filter((selection) => !matchesModel(selection))
+        : [...current, createModelSelection(instanceId, model)];
+      if (next.length > 1) {
+        onMultipleModelSelectionsChange(next);
+      } else {
+        onMultipleModelSelectionsChange(null);
+        const remaining = next[0] ?? selectedModelSelection;
+        onProviderModelSelect(remaining.instanceId, remaining.model, {
+          focusComposer: false,
+        });
+      }
+    },
+  );
   const restingBlockDefs = showModeBlock
     ? [
         {
@@ -190,6 +263,7 @@ export function ComposerControlsBar(props: {
       workspaceCwd={props.workspaceCwd}
       compact={false}
       isComposerOwned
+      triggerVariant={inlineDraftPillsActive ? "all-pill" : "default"}
       // The trigger grows away from this edge when its model or effort label changes.
       popupAlign={composerControlsCollapsed ? "start" : "end"}
       disabled={providerCatalogPending || isSendBusy}
@@ -198,28 +272,24 @@ export function ComposerControlsBar(props: {
       onMultipleModelSelectionsChange={onMultipleModelSelectionsChange}
       selectedModelSelection={selectedModelSelection}
       onProviderModelSelect={onProviderModelSelect}
-      activeInstanceId={
-        providerCatalogPending
-          ? (activeThreadModelSelection?.instanceId ?? selectedInstanceId)
-          : selectedInstanceId
-      }
-      model={
-        providerCatalogPending
-          ? (activeThreadModelSelection?.model ?? selectedModelForPickerWithCustomFallback)
-          : selectedModelForPickerWithCustomFallback
-      }
+      activeInstanceId={activePickerInstanceId}
+      model={activePickerModel}
       lockedProvider={lockedProvider}
       lockedContinuationGroupKey={lockedContinuationGroupKey}
       instanceEntries={providerInstanceEntries}
       keybindings={keybindings}
       modelOptionsByInstance={modelOptionsByInstance}
       size={controlSize}
-      triggerClassName={cn(
-        "group/model-trigger",
-        MODEL_TRIGGER_STATES,
-        composerControlsCollapsed ? "min-w-13 shrink text-xs!" : "min-w-13",
-      )}
-      triggerSuffix={effort.suffix}
+      {...(inlineDraftPillsActive
+        ? {}
+        : {
+            triggerClassName: cn(
+              "group/model-trigger",
+              MODEL_TRIGGER_STATES,
+              composerControlsCollapsed ? "min-w-13 shrink text-xs!" : "min-w-13",
+            ),
+            triggerSuffix: effort.suffix,
+          })}
       triggerDetail={effort.detail}
       triggerShortcuts={
         pickerOwnsModeShortcut ? "composer.effort composer.mode" : "composer.effort"
@@ -265,7 +335,27 @@ export function ComposerControlsBar(props: {
     </ComposerControl>
   ) : (
     <>
-      {composerModelPicker}
+      {inlineDraftPillsActive ? (
+        <>
+          <InlineComposerEffortControl
+            traits={traitsInput}
+            disabled={providerCatalogPending || isSendBusy}
+          />
+          {createPortal(
+            <DraftModelPillStrip
+              pills={draftModelPills}
+              disabled={providerCatalogPending || isSendBusy}
+              multipleModelsEnabled={multipleModelsEnabled}
+              onSelectModel={handleSelectDraftPill}
+              {...(multipleModelsEnabled ? { onToggleModel: handleToggleDraftPill } : {})}
+              pickerTrigger={composerModelPicker}
+            />,
+            draftModelStripHost,
+          )}
+        </>
+      ) : (
+        composerModelPicker
+      )}
 
       <>
         {restingBlockDefs.map((def, index) => {

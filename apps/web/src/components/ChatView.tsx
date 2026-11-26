@@ -697,6 +697,7 @@ export default function ChatView(props: ChatViewProps) {
     return accepted;
   });
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
+  const [draftModelStripHost, setDraftModelStripHost] = useState<HTMLDivElement | null>(null);
   const [optimisticBlobPreviews] = useState(createOptimisticBlobPreviews);
   const [heldOptimisticUserMessages, setHeldOptimisticUserMessages] = useState(() =>
     emptyOptimisticUserMessages(threadId),
@@ -3933,6 +3934,8 @@ export default function ChatView(props: ChatViewProps) {
                                 permissionsShownInStrip={
                                   showComposerContextStrip && !isServerThread
                                 }
+                                isDraftHeroState={isDraftHeroState}
+                                draftModelStripHost={isDraftHeroState ? draftModelStripHost : null}
                                 promptRef={promptRef}
                                 composerImagesRef={composerImagesRef}
                                 composerFilesRef={composerFilesRef}
@@ -3987,7 +3990,14 @@ export default function ChatView(props: ChatViewProps) {
                             className="relative z-0"
                           >
                             {showComposerContextStrip && (
-                              <div className="pointer-events-auto">
+                              <div
+                                data-draft-composer-bottom={isDraftHeroState ? "true" : undefined}
+                                className={cn(
+                                  "pointer-events-auto",
+                                  isDraftHeroState &&
+                                    "group/draft-bottom has-data-[draft-model-pill-strip]:flex has-data-[draft-model-pill-strip]:flex-wrap has-data-[draft-model-pill-strip]:items-start has-data-[draft-model-pill-strip]:justify-between has-data-[draft-model-pill-strip]:gap-x-3 has-data-[draft-model-pill-strip]:gap-y-2 has-data-[draft-model-pill-strip]:px-1 has-data-[draft-model-pill-strip]:pt-2",
+                                )}
+                              >
                                 <BranchToolbar
                                   forceNewWorktree={multipleModelSelections !== null}
                                   ref={branchToolbarRef}
@@ -3998,6 +4008,7 @@ export default function ChatView(props: ChatViewProps) {
                                   isServerThread={isServerThread}
                                   showGitControls={workspaceModesOffered}
                                   showBranchControls={isGitRepo}
+                                  bundleLeftWhenDraftPills={isDraftHeroState}
                                   {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                   onEnvModeChange={onEnvModeChangeStable}
                                   startFromOrigin={startFromOrigin}
@@ -4039,10 +4050,22 @@ export default function ChatView(props: ChatViewProps) {
                                               activeProviderStatus?.supportedRuntimeModes
                                             }
                                             onRuntimeModeChange={handleRuntimeModeChangeStable}
+                                            className={
+                                              isDraftHeroState
+                                                ? "ms-auto min-w-0 shrink-0 group-has-data-[draft-model-pill-strip]/draft-bottom:ms-0"
+                                                : undefined
+                                            }
                                           />
                                         ),
                                       })}
                                 />
+                                {isDraftHeroState ? (
+                                  <div
+                                    ref={setDraftModelStripHost}
+                                    data-draft-model-strip-host="true"
+                                    className="ms-auto flex min-w-0 flex-1 items-center justify-end empty:hidden"
+                                  />
+                                ) : null}
                               </div>
                             )}
                           </div>

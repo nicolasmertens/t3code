@@ -448,6 +448,10 @@ export interface ChatComposerProps {
   onComposerOverlayHeightChange: (height: number) => void;
   /** The new-thread strip names the permissions, so the controls row hides its chip. */
   permissionsShownInStrip: boolean;
+  /** True on a new empty thread before the first message is sent. */
+  isDraftHeroState?: boolean;
+  /** Host element below the composer where the inline draft model pill strip renders. */
+  draftModelStripHost?: HTMLDivElement | null;
 
   promptRef: React.RefObject<string>;
   composerImagesRef: React.RefObject<ComposerImageAttachment[]>;
@@ -2727,6 +2731,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       onModelPickerOpenChange={setIsComposerModelPickerOpen}
       modelPickerIconClassName={composerProviderState.modelPickerIconClassName}
       getModelDisabledReason={getModelDisabledReason}
+      showDraftModelPills={Boolean(
+        props.isDraftHeroState &&
+        !isComposerApprovalState &&
+        pendingUserInputs.length === 0 &&
+        !isEditingQueuedMessage &&
+        !isComposerCollapsedMobile,
+      )}
+      draftModelStripHost={props.draftModelStripHost ?? null}
     />
   );
   // An open question owns the space above the composer. Only a machine problem,

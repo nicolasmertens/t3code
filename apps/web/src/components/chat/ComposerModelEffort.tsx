@@ -9,7 +9,14 @@ import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { getProviderOptionCurrentLabel } from "@t3tools/shared/model";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { CheckIcon, ChevronRightIcon, ChevronUpIcon, WorkflowIcon } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, use, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+  use,
+  useRef,
+  useState,
+} from "react";
 
 import { m, type MessageResolver } from "~/i18n/messages";
 import { cn } from "~/lib/utils";
@@ -736,4 +743,168 @@ export function ComposerPickerFooter(props: {
       />
     </div>
   );
+}
+
+const INLINE_EFFORT_SEGMENT =
+  "flex h-6 cursor-pointer items-center rounded-full px-2 text-xs font-medium text-muted-foreground outline-none transition-[background-color,color,box-shadow] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-55 data-checked:bg-background data-checked:text-foreground data-checked:shadow-xs dark:data-checked:bg-card";
+
+function InlineEffortButton(props: {
+  label: string;
+  description?: string | undefined;
+  checked: boolean;
+  disabled?: boolean;
+  onPick: () => void;
+}) {
+  const buttonProps = {
+    type: "button" as const,
+    role: "radio" as const,
+    "aria-checked": props.checked,
+    "data-checked": props.checked || undefined,
+    disabled: props.disabled,
+    className: INLINE_EFFORT_SEGMENT,
+    onPointerDown: (event: PointerEvent<HTMLButtonElement>) => event.preventDefault(),
+    onClick: props.onPick,
+  };
+  if (!props.description) {
+    return <button {...buttonProps}>{props.label}</button>;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<button {...buttonProps} />}>{props.label}</TooltipTrigger>
+      <TooltipPopup side="top" className="max-w-56">
+        {props.description}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function InlineComposerEffortContent(props: {
+  traits: TraitsSelectionInput;
+  disabled?: boolean | undefined;
+}) {
+  const gt = useGT();
+  const messages = useMessages();
+  const traits = useTraitsSelection(props.traits);
+  const { effort } = columnControls(traits.selectDescriptors, traits.booleanDescriptors);
+  const { fastToggle, ultracodeToggle } = splitSpeed(
+    traits.selectDescriptors,
+    traits.booleanDescriptors,
+  );
+
+  if (traits.modelIsUnavailable) return null;
+  if (!effort && !fastToggle && !ultracodeToggle) return null;
+
+  const locked =
+    effort?.descriptor.id === traits.primarySelectDescriptor?.id && traits.ultrathinkInBodyText;
+  const disabled = props.disabled === true;
+
+  return (
+    <div data-inline-composer-effort="true" className="flex min-w-0 shrink-0 items-center gap-1.5">
+      {effort?.kind === "select" ? (
+        <div
+          role="radiogroup"
+          aria-label={effort.descriptor.label}
+          className="inline-flex items-center rounded-full border border-border/70 bg-muted/60 p-0.5"
+        >
+          {selectableProviderOptionChoices(effort.descriptor).map((option) => (
+            <InlineEffortButton
+              key={option.id}
+              label={option.label}
+              description={locked ? messages(ULTRATHINK_IN_BODY_NOTE) : option.description}
+              checked={option.id === traits.selectValue(effort.descriptor)}
+              disabled={disabled || locked}
+              onPick={() => traits.changeSelect(effort.descriptor, option.id)}
+            />
+          ))}
+        </div>
+      ) : effort?.kind === "boolean" ? (
+        <div
+          role="radiogroup"
+          aria-label={effort.descriptor.label}
+          className="inline-flex items-center rounded-full border border-border/70 bg-muted/60 p-0.5"
+        >
+          {([false, true] as const).map((value) => (
+            <InlineEffortButton
+              key={String(value)}
+              label={
+                value
+                  ? gt("On", { $context: "option state" })
+                  : gt("Off", { $context: "option state" })
+              }
+              checked={(effort.descriptor.currentValue === true) === value}
+              disabled={disabled}
+              onPick={() => traits.changeBoolean(effort.descriptor.id, value)}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {fastToggle ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-pressed={fastToggle.currentValue === true}
+                aria-label={gt("Fast", { $context: "response speed" })}
+                disabled={disabled}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() =>
+                  traits.changeBoolean(fastToggle.id, fastToggle.currentValue !== true)
+                }
+                className={cn(
+                  "inline-flex h-7 cursor-pointer items-center gap-1 rounded-full border px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-55",
+                  fastToggle.currentValue === true
+                    ? "border-foreground/25 bg-accent text-foreground"
+                    : "border-border/70 bg-muted/40 text-muted-foreground hover:text-foreground",
+                )}
+              />
+            }
+          >
+            <FastBolt ultra={false} />
+            <span>{gt("Fast", { $context: "response speed" })}</span>
+          </TooltipTrigger>
+          <TooltipPopup side="top">{fastToggle.label}</TooltipPopup>
+        </Tooltip>
+      ) : null}
+
+      {ultracodeToggle ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-pressed={ultracodeToggle.currentValue === true}
+                aria-label={ultracodeToggle.label}
+                disabled={disabled}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() =>
+                  traits.changeBoolean(ultracodeToggle.id, ultracodeToggle.currentValue !== true)
+                }
+                className={cn(
+                  "inline-flex h-7 cursor-pointer items-center gap-1 rounded-full border px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-55",
+                  ultracodeToggle.currentValue === true
+                    ? "border-foreground/25 bg-accent text-foreground"
+                    : "border-border/70 bg-muted/40 text-muted-foreground hover:text-foreground",
+                )}
+              />
+            }
+          >
+            <WorkflowIcon aria-hidden="true" className="size-3" />
+            <span>{ultracodeToggle.label}</span>
+          </TooltipTrigger>
+          <TooltipPopup side="top">{ultracodeToggle.label}</TooltipPopup>
+        </Tooltip>
+      ) : null}
+    </div>
+  );
+}
+
+/** Inline reasoning effort segmented control shown inside the new-thread composer footer. */
+export function InlineComposerEffortControl(props: {
+  traits: TraitsSelectionInput | null;
+  disabled?: boolean | undefined;
+}) {
+  if (!props.traits) return null;
+  return <InlineComposerEffortContent traits={props.traits} disabled={props.disabled} />;
 }
