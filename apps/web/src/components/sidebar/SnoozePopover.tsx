@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -294,7 +295,8 @@ function SnoozePopoverContent(props: SnoozePopoverContentProps) {
     }, HOVER_INTENT_MS);
   };
 
-  const handlePopoverKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+  const onWindowKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.repeat || event.isComposing) return;
     if (event.key === "Escape" && triggerSub !== null) {
       event.preventDefault();
       event.stopPropagation();
@@ -309,10 +311,17 @@ function SnoozePopoverContent(props: SnoozePopoverContentProps) {
     const index = Number(event.key) - 1;
     if (index >= 0 && index < SNOOZE_PICKER_TABS.length) {
       event.preventDefault();
+      event.stopPropagation();
       const targetTab = SNOOZE_PICKER_TABS[index];
       if (targetTab) switchTab(targetTab);
     }
-  };
+  });
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window capture keydown listener for popover tab shortcuts and subview back
+  useEffect(() => {
+    globalThis.window.addEventListener("keydown", onWindowKeyDown, true);
+    return () => globalThis.window.removeEventListener("keydown", onWindowKeyDown, true);
+  }, []);
 
   const handleTabListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
@@ -481,7 +490,6 @@ function SnoozePopoverContent(props: SnoozePopoverContentProps) {
       className="flex w-[296px] flex-col overflow-hidden text-popover-foreground select-none"
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
-      onKeyDown={handlePopoverKeyDown}
     >
       <div
         role="tablist"

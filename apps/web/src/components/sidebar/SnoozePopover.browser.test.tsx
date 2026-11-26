@@ -77,12 +77,12 @@ describe("SnoozePopover", () => {
     await userEvent.click(page.getByRole("tab", { name: "Interval" }));
 
     await expect
-      .element(page.getByRole("button", { name: /Tomorrow/ }))
-      .toHaveTextContent("Fri 9:00 AM");
+      .element(page.getByRole("button", { name: /Tomorrow/ }).getByText("Fri 9:00 AM"))
+      .toBeVisible();
     await userEvent.click(page.getByRole("button", { name: "1 PM" }));
     await expect
-      .element(page.getByRole("button", { name: /Tomorrow/ }))
-      .toHaveTextContent("Fri 1:00 PM");
+      .element(page.getByRole("button", { name: /Tomorrow/ }).getByText("Fri 1:00 PM"))
+      .toBeVisible();
 
     await userEvent.click(page.getByRole("button", { name: /Next Monday/ }));
     expect(onSnooze).toHaveBeenCalledWith({
