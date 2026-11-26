@@ -1,10 +1,14 @@
-// @effect-diagnostics globalFetch:off globalDate:off globalTimers:off - Phonic STS adapter runs over undici WebSocket and keepalive timers.
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalDate:off globalTimers:off - Phonic STS adapter loads undici via createRequire for Node SEA compatibility.
+import * as NodeModule from "node:module";
+
 import {
   TALK_TO_FLEET_INPUT_SAMPLE_RATE,
   TALK_TO_FLEET_OUTPUT_SAMPLE_RATE,
 } from "@t3tools/contracts";
 import * as Layer from "effect/Layer";
-import { WebSocket as UndiciWebSocket } from "undici";
+import type * as Undici from "undici";
+
+const requireUndici = NodeModule.createRequire(import.meta.url);
 
 import {
   RealtimeVoiceProvider,
@@ -136,6 +140,7 @@ async function connectPhonicVoiceProvider(
       ? null
       : await fetchPhonicAgentOverrides(apiKey, project, agentName);
 
+  const { WebSocket: UndiciWebSocket } = requireUndici("undici") as typeof Undici;
   const wsUrl = options?.endpoint ?? PHONIC_WS_ENDPOINT;
   const ws = new UndiciWebSocket(wsUrl, {
     headers: { Authorization: `Bearer ${apiKey}` },
