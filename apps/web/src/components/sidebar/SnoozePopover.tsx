@@ -145,7 +145,7 @@ export function SnoozePopover(props: SnoozePopoverProps) {
         onOpenChange(nextOpen);
       }}
     >
-      <Tooltip open={open ? false : undefined}>
+      <Tooltip disabled={open}>
         <TooltipTrigger
           render={
             <PopoverTrigger
