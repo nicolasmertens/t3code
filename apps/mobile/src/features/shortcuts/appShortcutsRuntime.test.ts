@@ -1,19 +1,29 @@
+import type { Action } from "expo-quick-actions";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("expo-quick-actions", () => ({}));
 vi.mock("react-native", () => ({ Platform: { OS: "android" } }));
 vi.mock("../../connection/catalog", () => ({}));
+vi.mock("../../lib/scopedEntities", () => ({
+  scopedProjectKey: (e: string, p: string) => `${e}:${p}`,
+}));
 vi.mock("../../persistence/imperative", () => ({}));
 vi.mock("../../state/atom-registry", () => ({}));
+vi.mock("../../state/projects", () => ({ environmentProjects: {} }));
 vi.mock("../../state/threads", () => ({ environmentThreadShells: {} }));
 vi.mock("./appShortcuts", async () => {
-  const { withRecentThreadShortcut } =
-    await vi.importActual<typeof import("./appShortcuts")>("./appShortcuts");
-  return { withRecentThreadShortcut };
+  const actual = await vi.importActual<typeof import("./appShortcuts")>("./appShortcuts");
+  return {
+    areShortcutActionsEqual: actual.areShortcutActionsEqual,
+    withRecentThreadShortcut: actual.withRecentThreadShortcut,
+  };
 });
 
 import type { RecentThreadShortcut } from "../../persistence/imperative";
-import { createRecentThreadShortcuts } from "./appShortcutsRuntime";
+import {
+  createDeduplicatedQuickActionPublisher,
+  createRecentThreadShortcuts,
+} from "./appShortcutsRuntime";
 
 const thread = (threadId: string, title = threadId): RecentThreadShortcut => ({
   environmentId: "env",
@@ -84,5 +94,44 @@ describe("createRecentThreadShortcuts", () => {
       [thread("a", "")],
       [thread("a", "Named")],
     ]);
+  });
+});
+
+describe("createDeduplicatedQuickActionPublisher", () => {
+  const action = (title: string): Action => ({
+    id: "quick-scratch",
+    title,
+    subtitle: "No project",
+    icon: "symbol:square.and.pencil",
+    params: { href: "/new/scratch" },
+  });
+
+  it("skips duplicate publishes and publishes again when actions change or reset", async () => {
+    const publish = vi.fn<(actions: Action[]) => Promise<void>>(() => Promise.resolve());
+    const publisher = createDeduplicatedQuickActionPublisher(publish);
+
+    await publisher.publish([action("Quick task")]);
+    await publisher.publish([action("Quick task")]);
+    expect(publish).toHaveBeenCalledTimes(1);
+
+    await publisher.publish([action("Snelle taak")]);
+    expect(publish).toHaveBeenCalledTimes(2);
+
+    publisher.reset();
+    await publisher.publish([action("Snelle taak")]);
+    expect(publish).toHaveBeenCalledTimes(3);
+  });
+
+  it("clears the deduplication cache after a failed publish so retries run", async () => {
+    using _warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const publish = vi
+      .fn<(actions: Action[]) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("native bridge failed"))
+      .mockResolvedValueOnce(undefined);
+    const publisher = createDeduplicatedQuickActionPublisher(publish);
+
+    await publisher.publish([action("Quick task")]);
+    await publisher.publish([action("Quick task")]);
+    expect(publish).toHaveBeenCalledTimes(2);
   });
 });

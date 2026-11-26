@@ -2,7 +2,11 @@ import { encodeSpeechPcmRequest } from "@t3tools/shared/speech";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { CloudSpeechError, SPEECH_STREAM_PATH } from "@t3tools/contracts";
+import {
+  CloudSpeechError,
+  SPEECH_STREAM_PATH,
+  TALK_TO_FLEET_STREAM_PATH,
+} from "@t3tools/contracts";
 import type {
   CloudSpeechModelId,
   CloudSpeechProvider,
@@ -176,6 +180,33 @@ export const getEnvironmentSpeechStreamUrl = (prepared: PreparedConnection) => {
       const url = new URL(SPEECH_STREAM_PATH, endpoint);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       url.searchParams.set("wsTicket", Redacted.value(ticket));
+      return url.toString();
+    }),
+  );
+};
+
+export const getEnvironmentTalkToFleetStreamUrl = (
+  prepared: PreparedConnection,
+  options?: { readonly threadId?: string },
+) => {
+  let endpoint = prepared.httpBaseUrl;
+  return request({
+    group: "auth",
+    prepared,
+    method: "POST",
+    path: (urls) => {
+      endpoint = urls.webSocketTicketFor({ params: { use: "media" } });
+      return endpoint;
+    },
+    run: ({ client, headers }) => client.webSocketTicketFor({ headers, params: { use: "media" } }),
+  }).pipe(
+    Effect.map(({ ticket }) => {
+      const url = new URL(TALK_TO_FLEET_STREAM_PATH, endpoint);
+      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      url.searchParams.set("wsTicket", Redacted.value(ticket));
+      if (options?.threadId) {
+        url.searchParams.set("threadId", options.threadId);
+      }
       return url.toString();
     }),
   );

@@ -1,10 +1,17 @@
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  AudioLinesIcon,
+  ChartNoAxesColumnIcon,
+  SettingsIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useAtomValue } from "@effect/atom-react";
+import { talkToFleetController, useTalkToFleetActive } from "../../speech/talkToFleetClient";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
@@ -234,10 +241,15 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   });
   const pullRequestsSupported = usePullRequestsSupported();
   const issuesSupported = useIssuesSupported();
+  const talkToFleetLive = useTalkToFleetActive();
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
     }
+  };
+  const handleTalkToFleetClick = () => {
+    closeMobileSidebar();
+    talkToFleetController.openPanel();
   };
   const handlePullRequestsClick = () => {
     closeMobileSidebar();
@@ -303,6 +315,13 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<ChartNoAxesColumnIcon />}
             label={gt("Usage")}
             onClick={handleUsageClick}
+          />
+          <SidebarUtilityItem
+            icon={
+              <AudioLinesIcon className={cn(talkToFleetLive && "text-primary animate-pulse")} />
+            }
+            label={gt("Talk to Fleet")}
+            onClick={handleTalkToFleetClick}
           />
         </>
       )}

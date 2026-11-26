@@ -131,6 +131,7 @@ import { SettingsKeyboardRouteScreen } from "./features/settings/SettingsKeyboar
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import { SettingsVoiceRouteScreen } from "./features/settings/SettingsVoiceRouteScreen";
 import { SettingsVoiceModelsRouteScreen } from "./features/settings/SettingsVoiceModelsRouteScreen";
+import { TalkToFleetRouteScreen } from "./features/talk-to-fleet/TalkToFleetRouteScreen";
 import {
   SettingsOpenSourceLicenseRouteScreen,
   SettingsOpenSourceLicensesRouteScreen,
@@ -217,6 +218,7 @@ const ROUTE_TITLES: Readonly<Record<string, string>> = {
   ConnectOnboarding: msg("Set up {product}", { product: "T3 Connect" }),
   Connections: msg("Environments"),
   ConnectionsNew: msg("Add Environment"),
+  TalkToFleet: msg("Talk to Fleet"),
 };
 
 // Thread settings keep the Duo's vertical bar so cancel, search, filter and confirm sit in the
@@ -661,7 +663,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     }),
     NewTaskProject: createNativeStackScreen({
       screen: NewTaskRouteScreen,
-      linking: { path: "new", alias: ["new/project"] },
+      linking: { path: "new", alias: ["new/project", "new/scratch"] },
       options: pageRoute(),
     }),
     NewTaskEnvironment: createNativeStackScreen({
@@ -866,6 +868,11 @@ const RootStackConfig = createWorkspaceStackNavigator({
       screen: ConnectionsNewRouteScreen,
       linking: "connections/new",
       options: sheetRoute({ detent: 0.55, maxDetent: 0.7 }),
+    }),
+    TalkToFleet: createNativeStackScreen({
+      screen: TalkToFleetRouteScreen,
+      linking: { path: "talk-to-fleet" },
+      options: modalRoute({ header: "none" }),
     }),
     NotFound: createNativeStackScreen({
       screen: NotFoundScreen,

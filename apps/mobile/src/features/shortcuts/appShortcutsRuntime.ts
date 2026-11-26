@@ -1,20 +1,28 @@
 import * as QuickActions from "expo-quick-actions";
+import type { Action } from "expo-quick-actions";
 import { Platform } from "react-native";
 import type { NavigationState } from "@react-navigation/native";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
 import { environmentCatalog } from "../../connection/catalog";
+import { scopedProjectKey } from "../../lib/scopedEntities";
 import {
   loadRecentThreadShortcuts,
   saveRecentThreadShortcuts,
   type RecentThreadShortcut,
 } from "../../persistence/imperative";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentProjects } from "../../state/projects";
 import { environmentThreadShells } from "../../state/threads";
 import {
   activeThreadRef,
+  areShortcutActionsEqual,
+  buildIosShortcutActions,
   buildShortcutActions,
+  IOS_FEATURE_SHORTCUTS,
+  MAX_IOS_SHORTCUTS,
+  selectIosShortcutThreads,
   shortcutHref,
   withRecentThreadShortcut,
 } from "./appShortcuts";
@@ -23,6 +31,34 @@ export interface RecentThreadShortcutsDependencies {
   readonly load: () => Promise<ReadonlyArray<RecentThreadShortcut>>;
   readonly save: (recents: ReadonlyArray<RecentThreadShortcut>) => Promise<void>;
   readonly publish: (recents: ReadonlyArray<RecentThreadShortcut>) => Promise<void>;
+}
+
+export function createDeduplicatedQuickActionPublisher(
+  publish: (actions: Action[]) => Promise<void>,
+) {
+  let lastPublished: ReadonlyArray<Action> | null = null;
+  let pending: Promise<void> = Promise.resolve();
+
+  return {
+    publish(actions: Action[]): Promise<void> {
+      if (areShortcutActionsEqual(lastPublished, actions)) {
+        return pending;
+      }
+      lastPublished = actions;
+      pending = pending.then(async () => {
+        try {
+          await publish(actions);
+        } catch (error: unknown) {
+          lastPublished = null;
+          console.warn("[app-shortcuts] failed to update launcher shortcuts", error);
+        }
+      });
+      return pending;
+    },
+    reset(): void {
+      lastPublished = null;
+    },
+  };
 }
 
 /**
@@ -104,8 +140,13 @@ export function createRecentThreadShortcuts(dependencies: RecentThreadShortcutsD
 }
 
 let installedRecents: ReturnType<typeof createRecentThreadShortcuts> | null = null;
+let installedIosRepublish: (() => void) | null = null;
 
 export function republishAppShortcuts(): void {
+  if (installedIosRepublish) {
+    installedIosRepublish();
+    return;
+  }
   installedRecents?.republish();
 }
 
@@ -133,8 +174,7 @@ const activeThreadShortcutAtom = Atom.make((get): RecentThreadShortcut | null =>
 
 /** Wired to the root navigation container's state changes. */
 export function recordAppShortcutNavigationState(state: NavigationState): void {
-  // Launcher shortcuts are Android-only; iOS never subscribes to thread shells.
-  if (Platform.OS !== "android") return;
+  if (Platform.OS !== "android" && Platform.OS !== "ios") return;
   const next = activeThreadRef(state);
   const current = appAtomRegistry.get(activeThreadRefAtom);
   if (next?.environmentId === current?.environmentId && next?.threadId === current?.threadId) {
@@ -155,15 +195,84 @@ export function installAppShortcuts(navigate: (href: string) => void): () => voi
     const href = shortcutHref(action);
     if (href !== null) navigate(href);
   });
-  if (Platform.OS !== "android") return () => subscription.remove();
+  if (Platform.OS !== "android" && Platform.OS !== "ios") {
+    return () => subscription.remove();
+  }
+
+  if (Platform.OS === "android") {
+    const recents = createRecentThreadShortcuts({
+      load: loadRecentThreadShortcuts,
+      save: saveRecentThreadShortcuts,
+      publish: (list) => QuickActions.setItems(buildShortcutActions(list)),
+    });
+    installedRecents = recents;
+    const unsubscribe = appAtomRegistry.subscribe(
+      activeThreadShortcutAtom,
+      (active) => recents.recordActiveThread(active),
+      { immediate: true },
+    );
+    const unsubscribeCatalog = appAtomRegistry.subscribe(
+      environmentCatalog.catalogValueAtom,
+      (catalog) => {
+        if (catalog.isReady) recents.retainEnvironments(new Set(catalog.entries.keys()));
+      },
+      { immediate: true },
+    );
+    return () => {
+      if (installedRecents === recents) installedRecents = null;
+      subscription.remove();
+      unsubscribe();
+      unsubscribeCatalog();
+    };
+  }
+
+  let latestRecents: ReadonlyArray<RecentThreadShortcut> = [];
+  let savedEnvironmentIds: ReadonlySet<string> | null = null;
+  const iosPublisher = createDeduplicatedQuickActionPublisher((actions) =>
+    QuickActions.setItems(actions),
+  );
+
+  const publishIos = () => {
+    const threads = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+    const projects = appAtomRegistry.get(environmentProjects.projectsAtom);
+    const projectTitleByKey = new Map<string, string>();
+    for (const project of projects) {
+      projectTitleByKey.set(scopedProjectKey(project.environmentId, project.id), project.title);
+    }
+    const reservedFeatureSlots = Math.min(
+      IOS_FEATURE_SHORTCUTS.length,
+      Math.max(0, MAX_IOS_SHORTCUTS - 2),
+    );
+    const maxThreadCount = Math.max(1, MAX_IOS_SHORTCUTS - 1 - reservedFeatureSlots);
+    const candidates = selectIosShortcutThreads({
+      threads,
+      projectTitleByKey,
+      recents: latestRecents,
+      savedEnvironmentIds,
+      nowIso: new Date().toISOString(),
+      maxCount: maxThreadCount,
+    });
+    void iosPublisher.publish(buildIosShortcutActions({ threads: candidates }));
+  };
+
+  const iosRepublish = () => {
+    iosPublisher.reset();
+    publishIos();
+  };
+  installedIosRepublish = iosRepublish;
 
   const recents = createRecentThreadShortcuts({
     load: loadRecentThreadShortcuts,
     save: saveRecentThreadShortcuts,
-    publish: (list) => QuickActions.setItems(buildShortcutActions(list)),
+    publish: (list) => {
+      latestRecents = list;
+      publishIos();
+      return Promise.resolve();
+    },
   });
   installedRecents = recents;
-  const unsubscribe = appAtomRegistry.subscribe(
+
+  const unsubscribeActive = appAtomRegistry.subscribe(
     activeThreadShortcutAtom,
     (active) => recents.recordActiveThread(active),
     { immediate: true },
@@ -171,14 +280,30 @@ export function installAppShortcuts(navigate: (href: string) => void): () => voi
   const unsubscribeCatalog = appAtomRegistry.subscribe(
     environmentCatalog.catalogValueAtom,
     (catalog) => {
-      if (catalog.isReady) recents.retainEnvironments(new Set(catalog.entries.keys()));
+      if (catalog.isReady) {
+        savedEnvironmentIds = new Set(catalog.entries.keys());
+        recents.retainEnvironments(savedEnvironmentIds);
+        publishIos();
+      }
     },
     { immediate: true },
   );
+  const unsubscribeThreads = appAtomRegistry.subscribe(
+    environmentThreadShells.threadShellsAtom,
+    () => publishIos(),
+  );
+  const unsubscribeProjects = appAtomRegistry.subscribe(environmentProjects.projectsAtom, () =>
+    publishIos(),
+  );
+  publishIos();
+
   return () => {
     if (installedRecents === recents) installedRecents = null;
+    if (installedIosRepublish === iosRepublish) installedIosRepublish = null;
     subscription.remove();
-    unsubscribe();
+    unsubscribeActive();
     unsubscribeCatalog();
+    unsubscribeThreads();
+    unsubscribeProjects();
   };
 }

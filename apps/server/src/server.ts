@@ -60,6 +60,10 @@ import * as SpeechService from "./speech/SpeechService.ts";
 import * as CloudSpeech from "./speech/CloudSpeech.ts";
 import { speechHttpApiLayer } from "./speech/http.ts";
 import { speechStreamRouteLayer } from "./speech/stream.ts";
+import { PhonicProviderLayer } from "./voice/PhonicProvider.ts";
+import { TalkToFleetService } from "./voice/TalkToFleetService.ts";
+import { VoiceContextCache } from "./voice/VoiceContextCache.ts";
+import { talkToFleetRouteLayer } from "./voice/talkToFleetRoute.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as IssueService from "./issue/IssueService.ts";
@@ -922,6 +926,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
     speechStreamRouteLayer,
+    talkToFleetRouteLayer,
   ),
   McpHttpServer.layer.pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
@@ -962,6 +967,12 @@ const layerMakeRoutes = Layer.mergeAll(
     SpeechService.layer.pipe(
       Layer.provide(layerServerSettings),
       Layer.provide(SpeechModelStore.layer),
+    ),
+  ),
+  Layer.provide(
+    TalkToFleetService.layer.pipe(
+      Layer.provide(VoiceContextCache.layer),
+      Layer.provide(PhonicProviderLayer),
     ),
   ),
   Layer.provide(CloudSpeech.layer.pipe(Layer.provide(SecretResolver.layer))),

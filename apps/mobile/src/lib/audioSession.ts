@@ -1,7 +1,7 @@
 import { AudioModule, setAudioModeAsync, setIsAudioActiveAsync } from "expo-audio";
 
 type AudioSessionToken = {
-  readonly kind: "playback" | "recording";
+  readonly kind: "playback" | "recording" | "liveVoice";
   readonly onCancel?: () => void;
   readonly onRelease?: () => void;
   released: boolean;
@@ -47,7 +47,13 @@ export function acquireAudioSession(
   onRelease?: () => void,
 ) {
   const token: AudioSessionToken = { kind, onCancel, onRelease, released: false };
-  if (kind === "playback" && owner?.kind === "recording" && !owner.released) return token;
+  if (
+    kind === "playback" &&
+    (owner?.kind === "recording" || owner?.kind === "liveVoice") &&
+    !owner.released
+  ) {
+    return token;
+  }
   const previous = owner;
   // Publish before cancelling the old player, including callbacks already queued by Expo.
   AudioModule.setAudioSessionOwner?.(true);
@@ -66,8 +72,8 @@ export function activateAudioSession(
 ): Promise<boolean> {
   return enqueue(async () => {
     if (!isAudioSessionOwner(token)) return false;
-    // Video configures and activates its own native session, including moviePlayback on iOS.
-    if (options.nativePlayback) return true;
+    // Live voice manages its own AVAudioSession directly in T3VoiceCall; video manages moviePlayback.
+    if (options.nativePlayback || token.kind === "liveVoice") return true;
     await setAudioModeAsync({
       allowsRecording: token.kind === "recording",
       ...(token.kind === "recording" && options.allowBluetoothRecording === false

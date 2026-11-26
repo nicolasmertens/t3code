@@ -1,4 +1,5 @@
 import { msg, useGT, useMessages } from "gt-react-native";
+import { useNavigation } from "@react-navigation/native";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
@@ -41,6 +42,7 @@ import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActi
 import { SettingsDragHandle } from "./components/SettingsDragHandle";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
+import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import {
   deviceMicrophoneOrder,
   localVoiceTranscriberAtom,
@@ -222,6 +224,7 @@ function EnvironmentMethodSection({
 export function SettingsVoiceRouteScreen() {
   const gt = useGT();
   const m = useMessages();
+  const navigation = useNavigation();
   const transcriber = useAtomValue(localVoiceTranscriberAtom);
   const grant = useAtomValue(voiceGrantAtom);
   const { environments, isReady } = useEnvironments();
@@ -243,6 +246,12 @@ export function SettingsVoiceRouteScreen() {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomCommand(saveMobilePreferences);
   const ready = AsyncResult.isSuccess(preferencesResult) && !preferencesResult.waiting;
+  const talkToFleetSpeaker = AsyncResult.isSuccess(preferencesResult)
+    ? (preferencesResult.value.talkToFleetSpeaker ?? true)
+    : true;
+  const talkToFleetShowCaptions = AsyncResult.isSuccess(preferencesResult)
+    ? (preferencesResult.value.talkToFleetShowCaptions ?? true)
+    : true;
   const entries = deviceMicrophoneOrder(
     AsyncResult.isSuccess(preferencesResult) ? preferencesResult.value.microphones : undefined,
   );
@@ -296,6 +305,30 @@ export function SettingsVoiceRouteScreen() {
         contentContainerClassName="gap-3 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
+        <SettingsSection title={gt("Talk to Fleet")}>
+          <SettingsActionRow
+            icon="mic"
+            label={gt("Start Talk to Fleet")}
+            description={gt("Hands-free bilingual live voice session with Fleet.")}
+            onPress={() => navigation.navigate("TalkToFleet")}
+          />
+          <SettingsSwitchRow
+            label={gt("Speakerphone by default")}
+            subtitle={gt("Start calls on speakerphone when no headset is connected.")}
+            value={talkToFleetSpeaker}
+            onValueChange={(value) => {
+              void savePreferences({ transform: () => ({ talkToFleetSpeaker: value }) });
+            }}
+          />
+          <SettingsSwitchRow
+            label={gt("Show live captions")}
+            subtitle={gt("Display spoken transcript cards during Talk to Fleet.")}
+            value={talkToFleetShowCaptions}
+            onValueChange={(value) => {
+              void savePreferences({ transform: () => ({ talkToFleetShowCaptions: value }) });
+            }}
+          />
+        </SettingsSection>
         <SettingsSection title={gt("Transcribe on")}>
           <ListChoiceRow
             label={gt("This device")}

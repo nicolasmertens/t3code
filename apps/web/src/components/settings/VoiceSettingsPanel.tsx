@@ -80,6 +80,7 @@ import {
 } from "../../speech/voiceConsent";
 import { updateClientSettings, useClientSettings } from "../../hooks/useSettings";
 import { runEnvironmentSpeech } from "../../speech/runEnvironmentSpeech";
+import { talkToFleetController } from "../../speech/talkToFleetClient";
 import {
   getTextGenerationModelOptionsByInstance,
   resolveAppModelSelectionState,
@@ -1433,6 +1434,24 @@ export function VoiceSettingsPanel() {
         "speech-correction-word": cleanupEnabled ? undefined : "speech-post-processing",
       }}
     >
+      <SettingsSection id="talk-to-fleet" title={gt("Talk to Fleet")}>
+        <SettingsRow
+          title={gt("Live voice")}
+          description={gt("Hands-free bilingual live voice session with Fleet.")}
+          control={
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => talkToFleetController.openPanel()}
+            >
+              <AudioLinesIcon />
+              {gt("Open Talk to Fleet")}
+            </Button>
+          }
+        />
+      </SettingsSection>
+
       <SettingsSection id="voice-input" title={gt("Input")}>
         <SettingsRow
           {...setting("voice-microphone")}

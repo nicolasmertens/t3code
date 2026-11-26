@@ -183,6 +183,8 @@ export interface Preferences {
   readonly workspaceSelections?: WorkspaceSelections;
   readonly pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
   readonly issueSavedViews?: ReadonlyArray<IssueSavedView>;
+  readonly talkToFleetSpeaker?: boolean;
+  readonly talkToFleetShowCaptions?: boolean;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -270,6 +272,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     workspaceSelections?: WorkspaceSelections;
     pullRequestSavedViews?: ReadonlyArray<PullRequestSavedView>;
     issueSavedViews?: ReadonlyArray<IssueSavedView>;
+    talkToFleetSpeaker?: boolean;
+    talkToFleetShowCaptions?: boolean;
   } = {};
 
   if (Array.isArray(parsed.hiddenNavigationTabs)) {
@@ -434,6 +438,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (Array.isArray(parsed.issueSavedViews)) {
     preferences.issueSavedViews = parsed.issueSavedViews.filter(isIssueSavedView);
+  }
+  if (typeof parsed.talkToFleetSpeaker === "boolean") {
+    preferences.talkToFleetSpeaker = parsed.talkToFleetSpeaker;
+  }
+  if (typeof parsed.talkToFleetShowCaptions === "boolean") {
+    preferences.talkToFleetShowCaptions = parsed.talkToFleetShowCaptions;
   }
   return preferences;
 }

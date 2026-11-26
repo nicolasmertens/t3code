@@ -1,8 +1,14 @@
 import { msg, useGT, useMessages } from "gt-react-native";
 import { useActiveNewTask } from "../../../state/active-new-task";
 import { Toolbar } from "../../../components/ui/Toolbar";
-import { useFocusEffect, useIsFocused, useNavigationState } from "@react-navigation/native";
+import {
+  useFocusEffect,
+  useIsFocused,
+  useNavigation,
+  useNavigationState,
+} from "@react-navigation/native";
 import { use, useCallback, useEffect, useRef } from "react";
+import { Platform } from "react-native";
 import { isDuoDevice } from "../../../lib/device-type";
 import { useDeviceType } from "../../../native/native-layout-metrics";
 import { createNativeHeaderMenu } from "../../../components/ui/nativeHeaderMenu.ios";
@@ -36,6 +42,7 @@ export function WorkspaceToolbar(props: {
 }) {
   const gt = useGT();
   const m = useMessages();
+  const navigation = useNavigation();
   const workspace = useWorkspaceTabs()!;
   const activeNewTask = useActiveNewTask();
   const deviceType = useDeviceType();
@@ -199,6 +206,15 @@ export function WorkspaceToolbar(props: {
         </Toolbar>
       ) : (
         <Toolbar placement="right">
+          {Platform.OS === "ios" ? (
+            <Toolbar.Button
+              identifier="workspace-talk-to-fleet"
+              accessibilityLabel={gt("Talk to Fleet")}
+              icon="waveform"
+              onPress={() => navigation.navigate("TalkToFleet")}
+              separateBackground
+            />
+          ) : null}
           {searchButton}
           {nativeToolbarCompose && foldedSearch ? <Toolbar.Spacer width={8} /> : null}
           {composeButton}

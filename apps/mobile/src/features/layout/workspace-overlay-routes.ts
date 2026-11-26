@@ -38,6 +38,7 @@ const LISTED_OVERLAY_ROUTES: ReadonlySet<string> = new Set([
   "ThreadBrowserPreview",
   "ThreadSettingsSheet",
   "WorkflowStep",
+  "TalkToFleet",
 ]);
 
 // Every route whose `presentation` is a sheet or modal, read from the root stack's config once.

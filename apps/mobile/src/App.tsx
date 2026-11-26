@@ -73,6 +73,10 @@ import {
   takeThreadPromptLink,
 } from "./features/prompt-links/threadPromptLink";
 import {
+  resolvePendingQuickScratchLink,
+  takeQuickScratchLink,
+} from "./features/shortcuts/quickScratchLink";
+import {
   disposeOnFoundationReplace,
   type FoundationHotModule,
 } from "./lib/foundation-fast-refresh";
@@ -82,6 +86,8 @@ import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordin
 import { ConnectDeviceApprovalCoordinator } from "./features/connection/ConnectDeviceApprovalCoordinator";
 import { installSubscriptionUsageRefresh } from "./widgets/useSubscriptionUsage";
 import { GlobalVoiceInputControl } from "./features/voice-input/GlobalVoiceInputControl";
+import { GlobalTalkToFleetPill } from "./features/talk-to-fleet/GlobalTalkToFleetPill";
+import { setTalkToFleetCurrentRouteName } from "./features/talk-to-fleet/TalkToFleetProvider";
 import {
   launchSplashHomeRowsPending,
   settleLaunchSplashHomeRows,
@@ -132,6 +138,7 @@ function getAppStateFromPath(path: string, options: Parameters<typeof getStateFr
     (state) => restoreSettingsLinkState(state, settingsLinkPage()),
     takeThreadPromptLink,
     takeNewTaskPromptLink,
+    (state) => takeQuickScratchLink(state, path),
     withoutPairingTarget,
     startDevAutoConnect,
     takeScheduledTaskNewLink,
@@ -184,10 +191,13 @@ function handleNavigationStateChange(state: NavigationState | undefined): void {
   recordWorkspaceSelections(state);
   presentPendingIncomingShare();
   resolvePendingNewTaskPromptLink(state);
+  resolvePendingQuickScratchLink(state);
   resolvePendingThreadPromptLink(state);
   if (!state) return;
   // A launch that opens another route has no Home rows for the splash to wait for.
-  if (state.routes[state.index]?.name !== "Home") settleLaunchSplashHomeRows();
+  const currentRouteName = state.routes[state.index]?.name ?? null;
+  if (currentRouteName !== "Home") settleLaunchSplashHomeRows();
+  setTalkToFleetCurrentRouteName(currentRouteName);
   setAgentNotificationPathname(workspaceLocationFromState(state).pathname);
   recordAppShortcutNavigationState(state);
   pruneNewTaskFlowStates(state);
@@ -269,7 +279,12 @@ function QuickActionsLanguage() {
   const publishedLocale = useRef(DEFAULT_LOCALE);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the launcher keeps quick action titles from the last publish, so a language switch republishes them
   useEffect(() => {
-    if (Platform.OS !== "android" || publishedLocale.current === locale) return;
+    if (
+      (Platform.OS !== "android" && Platform.OS !== "ios") ||
+      publishedLocale.current === locale
+    ) {
+      return;
+    }
     publishedLocale.current = locale;
     republishAppShortcuts();
   }, [locale]);
@@ -323,6 +338,7 @@ function AppContent() {
                   onStateChange={handleNavigationStateChange}
                 />
                 <Dialog.Host />
+                <GlobalTalkToFleetPill />
                 <ThreadArrangementHost />
                 <ProjectChipIconRasterizer />
               </NativeLayoutMetricsProvider>
