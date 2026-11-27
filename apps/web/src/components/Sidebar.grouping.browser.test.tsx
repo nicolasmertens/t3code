@@ -534,7 +534,6 @@ function mockSidebarContextMenu(stack: DisposableStack, selectedId: string | nul
 describe("sidebar project folder snooze and wake", () => {
   it("snoozes a collapsed project folder via hover SnoozePopover Tomorrow", async () => {
     using stack = new DisposableStack();
-    using _timers = fakeTimers({ now: new Date("2026-03-10T12:00:00.000Z") });
     const fleet = makeProject("fleet", "Fleet");
     const mubo = makeProject("mubo", "Mubo");
     const routeThread = makeThreadFixture({
@@ -575,8 +574,10 @@ describe("sidebar project folder snooze and wake", () => {
       .first();
     await expect.element(muboFolder).toBeVisible();
     // Collapse Mubo so its threads are hidden, then hover its header snooze button.
-    await userEvent.click(muboFolder.getByRole("button", { name: /Mubo/ }).first());
-    expect(screen.container.textContent).not.toContain("Mubo One");
+    const muboToggle = muboFolder.getByRole("button", { name: /^Mubo/ });
+    await userEvent.click(muboToggle);
+    await expect.element(muboToggle).toHaveAttribute("aria-expanded", "false");
+    await vi.waitFor(() => expect(screen.container.textContent).not.toContain("Mubo One"));
 
     await userEvent.hover(muboFolder);
     await userEvent.click(muboFolder.getByTestId("sidebar-project-folder-snooze"));
@@ -662,7 +663,7 @@ describe("sidebar project folder snooze and wake", () => {
 
     setupSidebarMocks(stack, [fleet, mubo], [routeThread, eligible, blocked], routeThread);
     const { snoozeThread } = mockProjectSnoozeActions(stack);
-    const showMenu = mockSidebarContextMenu(stack, "snooze-project:tomorrow");
+    const showMenu = mockSidebarContextMenu(stack, "snooze-project:at:tomorrow:09:00");
     useUiStateStore.setState({ sidebarGroupMode: "project" });
 
     await using screen = await render(
@@ -674,8 +675,7 @@ describe("sidebar project folder snooze and wake", () => {
     const muboHeader = screen
       .getByTestId("sidebar-project-folder")
       .filter({ hasText: "Mubo" })
-      .getByRole("button", { name: /Mubo/ })
-      .first();
+      .getByRole("button", { name: /^Mubo/ });
     await userEvent.click(muboHeader, { button: "right" });
 
     await vi.waitFor(() => expect(showMenu).toHaveBeenCalledTimes(1));
@@ -736,17 +736,17 @@ describe("sidebar project folder snooze and wake", () => {
       .first();
     await expect.element(snoozedMubo).toBeVisible();
     // Collapse the Snoozed Mubo sub-folder and wake via the hover button.
-    await userEvent.click(snoozedMubo.getByRole("button", { name: /Mubo/ }).first());
-    expect(screen.container.textContent).not.toContain("Snoozed Mubo 1");
+    const snoozedMuboToggle = snoozedMubo.getByRole("button", { name: /^Mubo/ });
+    await userEvent.click(snoozedMuboToggle);
+    await expect.element(snoozedMuboToggle).toHaveAttribute("aria-expanded", "false");
+    await vi.waitFor(() => expect(screen.container.textContent).not.toContain("Snoozed Mubo 1"));
 
     await userEvent.hover(snoozedMubo);
     await userEvent.click(snoozedMubo.getByTestId("sidebar-shelf-folder-wake"));
     await vi.waitFor(() => expect(unsnoozeThread).toHaveBeenCalledTimes(2));
 
     // Context menu on the Snoozed Mubo sub-folder also exposes Wake project (2).
-    await userEvent.click(snoozedMubo.getByRole("button", { name: /Mubo/ }).first(), {
-      button: "right",
-    });
+    await userEvent.click(snoozedMuboToggle, { button: "right" });
     await vi.waitFor(() => expect(showMenu).toHaveBeenCalledTimes(1));
     const menuItems = showMenu.mock.calls[0]?.[0] as ReadonlyArray<{
       readonly id: string;
