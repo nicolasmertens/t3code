@@ -79,10 +79,10 @@ export interface BrowneHubStats {
   readonly failedCount: number;
   readonly runningCount: number;
   readonly doneTodayCount: number;
-  readonly tightestQuotaPercent: number | null;
+  readonly tightestQuotaPercent?: number;
   readonly connectedEnvCount: number;
   readonly totalEnvCount: number;
-  readonly hostsUpLabel: string | null;
+  readonly hostsUpLabel?: string;
   readonly degradedHostCount: number;
 }
 
@@ -538,6 +538,8 @@ export function buildBrowneHubSnapshot(input: BuildBrowneHubSnapshotInput): Brow
     });
 
   const fleetItems = (input.fleetSummary?.items ?? []).slice(0, MAX_FLEET_ITEMS);
+  const tightestQuotaPercent = extractTightestQuotaPercent(input.usageSnapshot);
+  const hostsUpLabel = input.fleetSummary?.hostsUpLabel ?? null;
 
   return {
     version: 1,
@@ -553,10 +555,10 @@ export function buildBrowneHubSnapshot(input: BuildBrowneHubSnapshotInput): Brow
       failedCount,
       runningCount,
       doneTodayCount,
-      tightestQuotaPercent: extractTightestQuotaPercent(input.usageSnapshot),
+      ...(tightestQuotaPercent !== null ? { tightestQuotaPercent } : {}),
       connectedEnvCount: input.connectedEnvCount,
       totalEnvCount: input.totalEnvCount,
-      hostsUpLabel: input.fleetSummary?.hostsUpLabel ?? null,
+      ...(hostsUpLabel ? { hostsUpLabel } : {}),
       degradedHostCount: input.fleetSummary?.degradedHostCount ?? 0,
     },
     urgentTopics,
@@ -568,20 +570,51 @@ export function buildBrowneHubSnapshot(input: BuildBrowneHubSnapshotInput): Brow
   };
 }
 
+function sanitizePlistValue(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const sanitized: unknown[] = [];
+    for (const item of value) {
+      const next = sanitizePlistValue(item);
+      if (next !== undefined) sanitized.push(next);
+    }
+    return sanitized;
+  }
+  if (typeof value === "object") {
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      const next = sanitizePlistValue(entry);
+      if (next !== undefined) {
+        sanitized[key] = next;
+      }
+    }
+    return sanitized;
+  }
+  return undefined;
+}
+
 export function browneHubTimeline(
   snapshot: BrowneHubSnapshot,
   nowMs: number,
 ): WidgetTimelineEntry<BrowneHubSnapshot>[] {
+  const sanitize = (props: BrowneHubSnapshot): BrowneHubSnapshot =>
+    sanitizePlistValue(props) as BrowneHubSnapshot;
   const fresh: WidgetTimelineEntry<BrowneHubSnapshot> = {
     date: new Date(nowMs),
-    props: { ...snapshot, stale: false },
+    props: sanitize({ ...snapshot, stale: false }),
   };
   if (snapshot.stats.runningCount === 0 && snapshot.stats.urgentCount === 0) {
     return [fresh];
   }
   const stale: WidgetTimelineEntry<BrowneHubSnapshot> = {
     date: new Date(nowMs + BROWNE_HUB_STALE_AFTER_MS),
-    props: { ...snapshot, stale: true },
+    props: sanitize({ ...snapshot, stale: true }),
   };
   return [fresh, stale];
 }

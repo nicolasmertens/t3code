@@ -387,4 +387,88 @@ describe("browneHubSnapshot", () => {
     expect(snapshot.stats.runningCount).toBe(2);
     expect(snapshot.runningTopics.map((topic) => topic.threadId)).toEqual(["t-latest-run", "t-bg"]);
   });
+
+  it("omits null and non-plist values recursively from timeline props for iOS UserDefaults", () => {
+    const assertPlistSafe = (value: unknown, path = "root"): void => {
+      expect(value, `${path} must not be null`).not.toBeNull();
+      expect(value, `${path} must not be undefined`).not.toBeUndefined();
+      if (typeof value === "number") {
+        expect(Number.isFinite(value), `${path} must be finite`).toBe(true);
+        return;
+      }
+      if (typeof value === "string" || typeof value === "boolean") {
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => assertPlistSafe(item, `${path}[${index}]`));
+        return;
+      }
+      if (value !== null && typeof value === "object") {
+        for (const [key, entry] of Object.entries(value)) {
+          assertPlistSafe(entry, `${path}.${key}`);
+        }
+        return;
+      }
+      throw new Error(`Unsupported plist type ${typeof value} at ${path}`);
+    };
+
+    const emptySnapshot = buildBrowneHubSnapshot({
+      threads: [],
+      projects: [],
+      environmentLabelsById: new Map(),
+      connectedEnvCount: 0,
+      totalEnvCount: 0,
+      nowMs: NOW_MS,
+    });
+    expect("tightestQuotaPercent" in emptySnapshot.stats).toBe(false);
+    expect("hostsUpLabel" in emptySnapshot.stats).toBe(false);
+    for (const entry of browneHubTimeline(emptySnapshot, NOW_MS)) {
+      assertPlistSafe(entry.props, "empty");
+    }
+
+    const populatedSnapshot = buildBrowneHubSnapshot({
+      threads: [
+        makeThreadShellFixture({
+          environmentId: ENV_1,
+          id: ThreadId.make("t-run"),
+          projectId: PROJ_A,
+          title: "Running work",
+          hasPendingApprovals: true,
+        }),
+      ],
+      projects: [makeProject({ id: PROJ_A, title: "Browne" })],
+      environmentLabelsById: new Map([[ENV_1, "agents"]]),
+      savedEnvironmentIds: new Set([ENV_1]),
+      connectedEnvCount: 1,
+      totalEnvCount: 1,
+      fleetSummary: {
+        hostsUpLabel: "3/3",
+        degradedHostCount: 0,
+        items: [
+          {
+            id: "host-1",
+            title: "agents healthy",
+            subtitle: "15%",
+            badge: "OK",
+            severity: "ok",
+            deepLink: "browne://talk-to-fleet",
+          },
+        ],
+      },
+      nowMs: NOW_MS,
+    });
+    const dirtySnapshot = {
+      ...populatedSnapshot,
+      stats: {
+        ...populatedSnapshot.stats,
+        tightestQuotaPercent: Number.NaN,
+      },
+      extraNull: null,
+    } as unknown as typeof populatedSnapshot;
+    for (const entry of browneHubTimeline(dirtySnapshot, NOW_MS)) {
+      assertPlistSafe(entry.props, "populated");
+      expect("extraNull" in entry.props).toBe(false);
+      expect("tightestQuotaPercent" in entry.props.stats).toBe(false);
+    }
+  });
 });

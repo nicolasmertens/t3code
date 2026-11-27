@@ -37,8 +37,8 @@ export async function publishBrowneHub(
     }
   }
   if (snapshotChanged) {
+    widget.updateTimeline(browneHubTimeline(snapshot, now));
     lastFingerprint = fingerprint;
     lastPublishedAtMs = now;
-    widget.updateTimeline(browneHubTimeline(snapshot, now));
   }
 }
