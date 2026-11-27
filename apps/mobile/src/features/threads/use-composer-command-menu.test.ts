@@ -105,6 +105,20 @@ describe("mobile slash commands", () => {
     expect(build(false)).toEqual(["pcmd:clear"]);
     expect(build(true, false)).toEqual([]);
   });
+
+  it("offers /x when side chats are offered, only at message start", () => {
+    const build = (offersSideChat: boolean, atMessageStart = true) =>
+      buildComposerSlashCommandItems({
+        query: "x",
+        atMessageStart,
+        hasThread: true,
+        offersSideChat,
+        selectedProviderStatus: null,
+      }).map((item) => item.id);
+    expect(build(true)).toEqual(["cmd:x"]);
+    expect(build(false)).toEqual([]);
+    expect(build(true, false)).toEqual([]);
+  });
 });
 
 describe("mobile model mentions", () => {

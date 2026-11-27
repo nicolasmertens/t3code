@@ -1,7 +1,12 @@
 import { msg } from "gt-react";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
-import { isClearComposerCommand, parseSideChatCommand } from "@t3tools/shared/composerTrigger";
+import {
+  isClearComposerCommand,
+  parseSideChatCommand,
+  parseXResearchCommand,
+} from "@t3tools/shared/composerTrigger";
+import { formatXResearchSideChatPrompt } from "../../lib/xResearchSideChat";
 import { readWorktreeBaseBranch } from "../../worktreeRepositoryChoiceStore";
 import { armFreshSession, disarmFreshSession, readFreshSessionArm } from "./freshSessionArms";
 import {
@@ -282,6 +287,12 @@ interface ComposerSendInput {
   readonly onSideChat?: ((message: SideChatMessage | undefined) => Promise<boolean>) | undefined;
   /** Refuses `/side` with this reason and keeps the draft. */
   readonly sideChatDisabledReason: string | null;
+  /** Resolves true once the Grok X Research side chat started and got the message. */
+  readonly onXResearchSideChat?:
+    | ((message: SideChatMessage | undefined) => Promise<boolean>)
+    | undefined;
+  /** Refuses `/x` with this reason and keeps the draft. */
+  readonly xResearchSideChatDisabledReason?: string | null;
   readonly handleNewThreadInActiveProject: () => void;
   readonly persistThreadSettingsForNextTurn: (input: {
     threadId: ThreadId;
@@ -372,6 +383,8 @@ export function useComposerSend(input: ComposerSendInput) {
     acknowledgeActiveThreadWoke,
     onSideChat,
     sideChatDisabledReason,
+    onXResearchSideChat,
+    xResearchSideChatDisabledReason = null,
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
@@ -454,15 +467,30 @@ export function useComposerSend(input: ComposerSendInput) {
       ? detachedOverride.sendContext
       : composerRef.current?.getSendContext();
     const isCurrentRouteThread = () => currentRouteThreadKeyRef.current === routeThreadKey;
-    // `/side` beats an open question and a plan follow-up, which would send the text to main.
+    // `/side` and `/x` beat an open question and a plan follow-up, which would send the text to main.
     const sideChatCommand =
       sendCtx && !directAnnotation && !queuedRunEdit.isEditing
         ? parseSideChatCommand(promptAtSend)
         : null;
+    const xResearchCommand =
+      sendCtx && !directAnnotation && !queuedRunEdit.isEditing
+        ? parseXResearchCommand(promptAtSend)
+        : null;
+    const activeSideChatHandler =
+      xResearchCommand !== null
+        ? onXResearchSideChat
+        : sideChatCommand !== null
+          ? onSideChat
+          : undefined;
+    const activeSideChatDisabledReason =
+      xResearchCommand !== null ? xResearchSideChatDisabledReason : sideChatDisabledReason;
+    const activeSideChatCommand = xResearchCommand ?? sideChatCommand;
     const answeringQuestion =
       Boolean(activePendingUserInput) && sendCtx?.answeringPendingUserInput !== false;
     const startsSideChat =
-      onSideChat !== undefined && sideChatCommand !== null && sideChatDisabledReason === null;
+      activeSideChatHandler !== undefined &&
+      activeSideChatCommand !== null &&
+      activeSideChatDisabledReason === null;
     // An answer responds to the open request rather than starting a turn, so the new-message
     // guards below (loading, busy, provider) must not swallow it.
     if (answeringQuestion && !startsSideChat && !directAnnotation) {
@@ -538,13 +566,16 @@ export function useComposerSend(input: ComposerSendInput) {
       });
       return;
     }
-    // Where side chats are unavailable, `/side` text can still be a literal answer.
-    if (sideChatDisabledReason !== null && sideChatCommand && !answeringQuestion) {
+    // Where side chats are unavailable, `/side` or `/x` text can still be a literal answer.
+    if (activeSideChatDisabledReason !== null && activeSideChatCommand && !answeringQuestion) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: m(msg("Side chat not started")),
-          description: sideChatDisabledReason,
+          title:
+            xResearchCommand !== null
+              ? m(msg("X Research side chat not started"))
+              : m(msg("Side chat not started")),
+          description: activeSideChatDisabledReason,
         }),
       );
       return;
@@ -616,10 +647,19 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return true;
     };
-    if (onSideChat && sendCtx && sideChatCommand && sideChatDisabledReason === null) {
+    if (
+      activeSideChatHandler &&
+      sendCtx &&
+      activeSideChatCommand &&
+      activeSideChatDisabledReason === null
+    ) {
       const replyTo =
         useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
-      const prompt = withReplyReference(sideChatCommand.prompt, replyTo);
+      const commandPrompt =
+        xResearchCommand !== null
+          ? formatXResearchSideChatPrompt(activeSideChatCommand.prompt)
+          : activeSideChatCommand.prompt;
+      const prompt = withReplyReference(commandPrompt, replyTo);
       const { sendableTerminalContexts, hasSendableContent } = deriveComposerSendState({
         prompt,
         imageCount: sendCtx.images.length + sendCtx.files.length,
@@ -676,17 +716,21 @@ export function useComposerSend(input: ComposerSendInput) {
         }
       }
       const started = await settlePromise(async () => {
-        if (!hasSendableContent) return onSideChat(undefined);
+        if (!hasSendableContent) return activeSideChatHandler(undefined);
         const attachments = await prepareTurnAttachments({
           environmentId,
           attachments: snapshot.attachments,
           usesAttachmentUploads: capabilities.supportsAttachmentUploads,
           draftTarget: composerDraftTarget,
         });
-        // `onSideChat` forks the thread on screen, which may have changed during the upload.
+        // `activeSideChatHandler` forks the thread on screen, which may have changed during the upload.
         if (currentRouteThreadKeyRef.current !== routeThreadKey) return false;
         const attachmentIds = boundAttachmentIds(attachments, snapshot.attachments);
-        return onSideChat({
+        const titleSourceText =
+          xResearchCommand !== null && activeSideChatCommand.prompt.length > 0
+            ? activeSideChatCommand.prompt
+            : snapshot.messageText;
+        return activeSideChatHandler({
           attachments,
           ...withMessageContext({
             text: snapshot.messageText || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
@@ -700,7 +744,7 @@ export function useComposerSend(input: ComposerSendInput) {
           }),
           titleSeed: deriveThreadTitleSeed(
             {
-              text: snapshot.messageText,
+              text: titleSourceText,
               attachments: snapshot.attachments,
               fallbackLabels: sendTitleFallbackLabels(snapshot),
             },
@@ -828,14 +872,19 @@ export function useComposerSend(input: ComposerSendInput) {
     const promptForSend = withReplyReference(draftPrompt, replyTo);
     if (warnStrandedThreadContext(promptForSend, composerThreadContexts)) return;
     if (queuedRunEdit.isEditing) {
-      // A queued message stays in its thread, so saving `/side` would send it to main.
-      if (!directAnnotation && parseSideChatCommand(promptAtSend)) {
+      // A queued message stays in its thread, so saving `/side` or `/x` would send it to main.
+      if (
+        !directAnnotation &&
+        (parseSideChatCommand(promptAtSend) || parseXResearchCommand(promptAtSend))
+      ) {
         toastManager.add(
           stackedThreadToast({
             type: "warning",
             title: m(msg("Queued message not updated")),
             description: m(
-              msg("A queued message can't move to a side chat. Remove /side or /btw to save it."),
+              msg(
+                "A queued message can't move to a side chat. Remove /side, /btw, or /x to save it.",
+              ),
             ),
           }),
         );

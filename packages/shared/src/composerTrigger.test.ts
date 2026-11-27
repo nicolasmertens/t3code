@@ -5,6 +5,7 @@ import { assert, describe, expect, it } from "vite-plus/test";
 import {
   detectComposerTrigger,
   parseSideChatCommand,
+  parseXResearchCommand,
   serializeComposerFileLink,
 } from "./composerTrigger.ts";
 import { resolveMarkdownFileLinkTarget } from "./markdownLinks.ts";
@@ -189,5 +190,20 @@ describe("parseSideChatCommand", () => {
     expect(parseSideChatCommand("/sidebar")).toBeNull();
     expect(parseSideChatCommand("/btwx")).toBeNull();
     expect(parseSideChatCommand("ask /side later")).toBeNull();
+  });
+});
+
+describe("parseXResearchCommand", () => {
+  it("reads an optional prompt after /x", () => {
+    expect(parseXResearchCommand("/x")).toEqual({ prompt: "" });
+    expect(parseXResearchCommand("  /X  expo widgets\nline two ")).toEqual({
+      prompt: "expo widgets\nline two",
+    });
+  });
+
+  it("ignores other commands and inline mentions", () => {
+    expect(parseXResearchCommand("/xml")).toBeNull();
+    expect(parseXResearchCommand("/x-research")).toBeNull();
+    expect(parseXResearchCommand("foo /x bar")).toBeNull();
   });
 });

@@ -52,6 +52,7 @@ import {
   Globe2,
   MessagesSquare,
   Plus,
+  Search,
   TerminalSquare,
   Volume2Icon,
   VolumeOffIcon,
@@ -160,6 +161,8 @@ export interface RightPanelTabsProps {
   onAddDevice: () => void;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
+  /** Absent where side chats are not offered. */
+  onAddXResearch?: (() => void) | undefined;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -170,6 +173,9 @@ export interface RightPanelTabsProps {
   sideChatAvailable?: boolean;
   /** Overrides the default reason while side chats are available but cannot start. */
   sideChatDisabledReason?: string | null;
+  xResearchAvailable?: boolean;
+  /** Overrides the default reason while X research side chats are available but cannot start. */
+  xResearchDisabledReason?: string | null;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -197,6 +203,7 @@ const SURFACE_DISABLED_REASONS = {
   pullRequests: msg("This thread has no linked items."),
   device: msg("Devices are only available from a thread."),
   sideChat: msg("Side chats start after the first message."),
+  xResearch: msg("X research side chats start after the first message."),
 } as const;
 
 // Closed keepMounted popups must stop blocking shortcuts once their exit transition ends.
@@ -222,6 +229,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   pullRequests: msg("No linked items available."),
   device: msg("Available from a thread."),
   sideChat: msg("Available after the first message."),
+  xResearch: msg("Available after the first message."),
 } as const;
 
 type TabContextMenuAction =
@@ -346,6 +354,8 @@ function RightPanelEmptyState(props: {
   onAddDevice: () => void;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
+  /** Absent where side chats are not offered. */
+  onAddXResearch?: (() => void) | undefined;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -355,6 +365,8 @@ function RightPanelEmptyState(props: {
   deviceAvailable: boolean;
   sideChatAvailable: boolean;
   sideChatDisabledReason: string | null;
+  xResearchAvailable: boolean;
+  xResearchDisabledReason: string | null;
 }) {
   const gt = useGT();
   const messages = useMessages();
@@ -429,6 +441,20 @@ function RightPanelEmptyState(props: {
             disabledReason:
               props.sideChatDisabledReason ?? messages(SURFACE_UNAVAILABLE_HINTS.sideChat),
             onClick: props.onAddSideChat,
+          },
+        ]
+      : []),
+    ...(props.onAddXResearch
+      ? [
+          {
+            label: msg("X research"),
+            description: msg("Search X with Grok in a side chat."),
+            icon: Search,
+            shortcut: "X",
+            available: props.xResearchAvailable && !props.xResearchDisabledReason,
+            disabledReason:
+              props.xResearchDisabledReason ?? messages(SURFACE_UNAVAILABLE_HINTS.xResearch),
+            onClick: props.onAddXResearch,
           },
         ]
       : []),
@@ -1273,6 +1299,19 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           },
         ]
       : []),
+    ...(props.onAddXResearch
+      ? [
+          {
+            label: msg("X research"),
+            icon: Search,
+            shortcut: "X",
+            available: props.xResearchAvailable === true && !props.xResearchDisabledReason,
+            disabledReason:
+              props.xResearchDisabledReason ?? messages(SURFACE_DISABLED_REASONS.xResearch),
+            onClick: props.onAddXResearch,
+          },
+        ]
+      : []),
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1698,6 +1737,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequests={props.onAddPullRequests}
             onAddDevice={props.onAddDevice}
             onAddSideChat={props.onAddSideChat}
+            onAddXResearch={props.onAddXResearch}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
@@ -1707,6 +1747,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             deviceAvailable={props.deviceAvailable}
             sideChatAvailable={props.sideChatAvailable === true}
             sideChatDisabledReason={props.sideChatDisabledReason ?? null}
+            xResearchAvailable={props.xResearchAvailable === true}
+            xResearchDisabledReason={props.xResearchDisabledReason ?? null}
           />
         ) : (
           props.children

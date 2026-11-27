@@ -102,7 +102,15 @@ import {
   useComposerDraft,
   useComposerDraftSettings,
 } from "./use-composer-drafts";
-import { isClearComposerCommand, parseSideChatCommand } from "@t3tools/shared/composerTrigger";
+import {
+  isClearComposerCommand,
+  parseSideChatCommand,
+  parseXResearchCommand,
+} from "@t3tools/shared/composerTrigger";
+import {
+  formatXResearchSideChatPrompt,
+  resolveGrokXResearchModelSelection,
+} from "@t3tools/shared/xResearchSideChat";
 import { orchestrationV2WorktreePending } from "@t3tools/shared/orchestrationV2ThreadError";
 import {
   compactionBlocksSteering,
@@ -224,7 +232,11 @@ export function useThreadComposerState(input: {
   readonly startSideChat: (
     source: ScopedThreadRef,
     message: SideChatMessage,
-    settings: { readonly runtimeMode: RuntimeMode; readonly modelSelection: ModelSelection },
+    settings: {
+      readonly runtimeMode: RuntimeMode;
+      readonly modelSelection: ModelSelection;
+      readonly titleOverride?: string | undefined;
+    },
   ) => Promise<boolean>;
 }) {
   const {
@@ -524,15 +536,19 @@ export function useThreadComposerState(input: {
       );
       return;
     }
-    // A queued message stays in its thread, so saving `/side` would send it to main.
-    if (parseSideChatCommand(text)) {
+    // A queued message stays in its thread, so saving `/side` or `/x` would send it to main.
+    if (parseSideChatCommand(text) || parseXResearchCommand(text)) {
       Dialog.alert(
         m(msg("Queued message not updated")),
         m(
-          msg("A queued message can't move to a side chat. Remove {side} or {btw} to save it.", {
-            side: "/side",
-            btw: "/btw",
-          }),
+          msg(
+            "A queued message can't move to a side chat. Remove {side}, {btw}, or {x} to save it.",
+            {
+              side: "/side",
+              btw: "/btw",
+              x: "/x",
+            },
+          ),
         ),
       );
       return;
@@ -690,23 +706,58 @@ export function useThreadComposerState(input: {
       return null;
     }
 
-    // A redirect's text answers its approval, so `/side` there is that text, not the command.
+    // A redirect's text answers its approval, so `/side` or `/x` there is that text, not the command.
     const sideChatCommand = beforeDispatch === undefined ? parseSideChatCommand(text) : null;
-    if (sideChatCommand) {
-      if (sideChatUnavailableReason !== null) {
-        Dialog.alert(m(msg("Side chat not started")), sideChatUnavailableReason);
+    const xResearchCommand =
+      beforeDispatch === undefined && sideChatCommand === null ? parseXResearchCommand(text) : null;
+    if (sideChatCommand || xResearchCommand) {
+      const isXResearch = xResearchCommand !== null;
+      const commandPrompt = xResearchCommand ? xResearchCommand.prompt : sideChatCommand!.prompt;
+      const grokModelSelection = isXResearch
+        ? resolveGrokXResearchModelSelection(serverConfig?.providers ?? [])
+        : null;
+      const targetModelSelection = isXResearch ? grokModelSelection : modelSelection;
+      const startBlockedReason =
+        sideChatUnavailableReason ??
+        (isXResearch && grokModelSelection === null
+          ? m(msg("Enable a Grok (xAI) provider to use X research."))
+          : null);
+      if (startBlockedReason !== null) {
+        Dialog.alert(m(msg("Side chat not started")), startBlockedReason);
       } else if (
-        sideChatCommand.prompt.length === 0 &&
+        commandPrompt.length === 0 &&
         attachments.length === 0 &&
         (draft.context?.records.length ?? 0) === 0
       ) {
         Dialog.alert(
-          m(msg("Ask a side question")),
-          m(msg("Type the question after {command}, then send it.", { command: "/side" })),
+          isXResearch ? m(msg("Ask an X research question")) : m(msg("Ask a side question")),
+          isXResearch
+            ? m(msg("Type what to search on X after {command}, then send it.", { command: "/x" }))
+            : m(msg("Type the question after {command}, then send it.", { command: "/side" })),
         );
-      } else if (modelUnavailable) {
-        alertModelUnavailable();
+      } else if (
+        targetModelSelection === null ||
+        (!isXResearch
+          ? modelUnavailable
+          : selectedEnvironmentRuntime?.connectionState === "connected" &&
+            isModelSelectionUnavailable(serverConfig, targetModelSelection, thread.projectId))
+      ) {
+        if (isXResearch && targetModelSelection !== null) {
+          const { title, detail } = describeUnavailableModelSelection(
+            serverConfig,
+            targetModelSelection,
+            thread.projectId,
+          );
+          Dialog.alert(title, detail);
+        } else {
+          alertModelUnavailable();
+        }
       } else {
+        const outboundPrompt = isXResearch
+          ? commandPrompt.length > 0
+            ? formatXResearchSideChatPrompt(commandPrompt)
+            : ""
+          : commandPrompt;
         startingSideChatRef.current = true;
         // Cleared at send, like a queued message, so nothing in it can vanish mid-start. The
         // holds keep the local files until the side chat has them or the draft has them back.
@@ -730,17 +781,18 @@ export function useThreadComposerState(input: {
             {
               ...serializeComposerMessageForServer(
                 restoreAttachmentOnlyBootstrapPrompt(
-                  sideChatCommand.prompt,
+                  outboundPrompt,
                   prepared.attachments.length > 0,
                 ),
                 uploadedComposerContext(draft.context, attachments, prepared.attachments),
               ),
               attachments: prepared.attachments,
-              titleSeed: deriveThreadTitleSeed({ text: sideChatCommand.prompt, attachments }, m),
+              titleSeed: deriveThreadTitleSeed({ text: commandPrompt, attachments }, m),
             },
             {
               runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-              modelSelection,
+              modelSelection: targetModelSelection,
+              ...(isXResearch ? { titleOverride: m(msg("X Research")) } : {}),
             },
           );
         });

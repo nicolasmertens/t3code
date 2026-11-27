@@ -670,6 +670,10 @@
     "./assistantInsights": {
       "types": "./src/assistantInsights.ts",
       "import": "./src/assistantInsights.ts"
+    },
+    "./xResearchSideChat": {
+      "types": "./src/xResearchSideChat.ts",
+      "import": "./src/xResearchSideChat.ts"
     }
   },
   "scripts": {

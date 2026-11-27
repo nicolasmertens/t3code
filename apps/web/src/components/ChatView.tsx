@@ -314,7 +314,8 @@ import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { resolveScrollToEndClearance } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
-import { useSideChat } from "./chat/useSideChat";
+import { type SideChatMessage, useSideChat } from "./chat/useSideChat";
+import { resolveGrokXResearchModelSelection } from "../lib/xResearchSideChat";
 import { sideThreadComposer, sideThreadKindOf } from "@t3tools/client-runtime/side-thread";
 import { useOpenSurfaceInMainView } from "../hooks/useOpenSurfaceInMainView";
 import { useRemoteOpenState } from "~/remoteOpen";
@@ -3025,6 +3026,29 @@ export default function ChatView(props: ChatViewProps) {
                 ? gt("Available once the thread's worktree is set up.")
                 : null;
   const openSideChatStable = useStableCallback(() => void sideChat.open());
+  const grokXResearchModelSelection = resolveGrokXResearchModelSelection(providerStatuses);
+  const xResearchSideChatDisabledReason =
+    sideChatDisabledReason ??
+    (grokXResearchModelSelection === null
+      ? gt("Enable a Grok (xAI) provider to use X research.")
+      : null);
+  const openXResearchSideChatStable = useStableCallback(
+    () =>
+      void sideChat.open(undefined, {
+        ...(grokXResearchModelSelection === null
+          ? {}
+          : { modelSelectionOverride: grokXResearchModelSelection }),
+        titleOverride: "X Research",
+      }),
+  );
+  const sendXResearchSideChatStable = useStableCallback((message?: SideChatMessage) =>
+    sideChat.open(message, {
+      ...(grokXResearchModelSelection === null
+        ? {}
+        : { modelSelectionOverride: grokXResearchModelSelection }),
+      titleOverride: "X Research",
+    }),
+  );
   const openSurfaceInMainView = useOpenSurfaceInMainView(activeThreadRef);
   const sendSideChatStable = useStableCallback(sideChat.open);
   const { onConfirmRevertStable, onForkFromRunStable, onRevertTimelineTurnStable } =
@@ -3172,6 +3196,8 @@ export default function ChatView(props: ChatViewProps) {
     acknowledgeActiveThreadWoke,
     onSideChat: sideChat.available ? sendSideChatStable : undefined,
     sideChatDisabledReason,
+    onXResearchSideChat: sideChat.available ? sendXResearchSideChatStable : undefined,
+    xResearchSideChatDisabledReason,
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
@@ -3885,6 +3911,7 @@ export default function ChatView(props: ChatViewProps) {
                                 onToggleKeepFullHistory={toggleKeepFullHistoryStable}
                                 sideChatAvailable={sideChat.available}
                                 sideChatDisabledReason={sideChatDisabledReason}
+                                xResearchSideChatDisabledReason={xResearchSideChatDisabledReason}
                                 onFreshSession={
                                   freshSessionCommandAvailable ? armFreshSessionStable : undefined
                                 }
@@ -4251,6 +4278,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequests={addPullRequestsSurfaceStable}
           onAddDevice={addDeviceSurfaceStable}
           onAddSideChat={sideChatsOffered ? openSideChatStable : undefined}
+          onAddXResearch={sideChatsOffered ? openXResearchSideChatStable : undefined}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
           diffAvailable={isServerThread && diffAvailable}
@@ -4260,6 +4288,8 @@ export default function ChatView(props: ChatViewProps) {
           deviceAvailable={activeThreadRef !== null}
           sideChatAvailable={sideChat.available}
           sideChatDisabledReason={sideChatDisabledReason}
+          xResearchAvailable={sideChat.available}
+          xResearchDisabledReason={xResearchSideChatDisabledReason}
         >
           {rightPanelContent}
         </ChatRightPanel>

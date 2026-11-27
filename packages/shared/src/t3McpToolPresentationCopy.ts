@@ -119,6 +119,8 @@ const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
   ["Preview an HTML page", msg("Preview an HTML page")],
   ["Render an HTML page", msg("Render an HTML page")],
   ["Send a message", msg("Send a message")],
+  ["Research on X", msg("Research on X")],
+  ["Read an X post", msg("Read an X post")],
 ]);
 
 /** @public */

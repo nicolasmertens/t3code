@@ -63,11 +63,18 @@ it("treats only the commands the composer runs itself as local", () => {
     codexFeedback: true,
     freshSession: true,
   };
-  for (const text of ["/btw why?", "/usage-limits", "/feedback slow", "/clear"]) {
+  for (const text of [
+    "/btw why?",
+    "/x expo widgets",
+    "/usage-limits",
+    "/feedback slow",
+    "/clear",
+  ]) {
     expect(composerRunsDraftLocally({ ...all, text })).toBe(true);
     expect(composerRunsDraftLocally({ ...none, text })).toBe(false);
   }
   expect(composerRunsDraftLocally({ ...all, text: "fix the bug" })).toBe(false);
   expect(composerRunsDraftLocally({ ...all, holdsOnlyText: false, text: "/clear" })).toBe(false);
   expect(composerRunsDraftLocally({ ...all, holdsOnlyText: false, text: "/side why?" })).toBe(true);
+  expect(composerRunsDraftLocally({ ...all, holdsOnlyText: false, text: "/x expo" })).toBe(true);
 });

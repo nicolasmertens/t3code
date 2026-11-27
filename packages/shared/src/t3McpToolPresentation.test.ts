@@ -69,5 +69,9 @@ describe("resolveT3McpSummaryAction", () => {
       "schedule-update",
     );
     expect(resolveT3McpSummaryAction("delegate_task", { task: "x" })).toBe("delegate");
+    expect(resolveT3McpSummaryAction("x_research", { query: "expo" })).toBe("x-research");
+    expect(resolveT3McpSummaryAction("x_read_post", { url: "https://x.com/jack/status/20" })).toBe(
+      "x-read-post",
+    );
   });
 });

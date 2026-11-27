@@ -139,6 +139,7 @@ export function buildComposerSlashCommandItems(
     for (const [command, description] of [
       ["side", resolve(msg("Ask a side question in a new side chat"))],
       ["btw", resolve(msg("Same as /side"))],
+      ["x", resolve(msg("Research on X in a Grok side chat"))],
     ] as const) {
       if (!command.includes(query)) continue;
       items.push({

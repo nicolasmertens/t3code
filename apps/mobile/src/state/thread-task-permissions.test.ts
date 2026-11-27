@@ -544,6 +544,77 @@ describe("mobile task permissions", () => {
     expect(Alert.alert).toHaveBeenCalledOnce();
   });
 
+  it("starts a Grok X research side chat for /x when Grok is available", async () => {
+    state.grantedEnvironments.add("secondary");
+    state.serverConfig = {
+      ...state.serverConfig,
+      environment: { capabilities: { sideChats: true } },
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          auth: { status: "authenticated" },
+          models: [],
+        },
+        {
+          instanceId: "grok",
+          driver: "grok",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          auth: { status: "authenticated" },
+          models: [{ slug: "grok-4.7-build-fast", name: "Grok 4.7 Build Fast" }],
+        },
+      ],
+    } as unknown as ServerConfig;
+    state.draft = {
+      ...state.draft,
+      text: "/x latest Expo widgets",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+      runtimeMode: "approval-required",
+    };
+    const startSideChat = vi.fn(async () => true);
+    const composer = useThreadComposerState({ startSideChat });
+    expect(await composer.onSendMessage()).toBeNull();
+    expect(startSideChat).toHaveBeenCalledExactlyOnceWith(
+      { environmentId: "secondary", threadId: "thread" },
+      expect.objectContaining({
+        attachments: [],
+        titleSeed: "latest Expo widgets",
+        text: expect.stringContaining("latest Expo widgets"),
+      }),
+      {
+        runtimeMode: "approval-required",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-4.7-build-fast",
+        },
+        titleOverride: "X Research",
+      },
+    );
+    expect(state.enqueue).not.toHaveBeenCalled();
+    expect(state.clearDraft).toHaveBeenCalled();
+
+    // Missing/disabled Grok provider alerts without starting a side chat.
+    vi.clearAllMocks();
+    state.serverConfig = {
+      ...state.serverConfig,
+      providers: [
+        { instanceId: "codex", driver: "codex", enabled: true, status: "ready", models: [] },
+      ],
+    } as unknown as ServerConfig;
+    state.draft = {
+      ...state.draft,
+      text: "/x anything",
+    };
+    expect(await useThreadComposerState({ startSideChat }).onSendMessage()).toBeNull();
+    expect(startSideChat).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledOnce();
+  });
+
   it("rechecks a retained send callback before clearing or queueing the draft", async () => {
     state.grantedEnvironments.add("secondary");
     const composer = useThreadComposerState(NO_SIDE_CHATS);

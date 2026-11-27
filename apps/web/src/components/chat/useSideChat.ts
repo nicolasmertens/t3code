@@ -25,6 +25,11 @@ export type SideChatMessage = Pick<
   "text" | "attachments" | "context"
 > & { readonly titleSeed: string };
 
+export interface SideChatOpenOptions {
+  readonly modelSelectionOverride?: ModelSelection | undefined;
+  readonly titleOverride?: string | undefined;
+}
+
 /**
  * Starts side chats from `threadRef`, or offers none when it is null. `open` forks the
  * thread's latest stable point, sends `message` there with `readSettings()`, the parent
@@ -56,13 +61,22 @@ export function useSideChat(input: {
     const error = squashAtomCommandFailure(failure);
     input.onError(thrownErrorMessage(error, m) ?? fallback);
   };
-  const start = async (threadRef: ScopedThreadRef, message: SideChatMessage | undefined) => {
-    const { runtimeMode, modelSelection } = input.readSettings();
+  const start = async (
+    threadRef: ScopedThreadRef,
+    message: SideChatMessage | undefined,
+    options?: SideChatOpenOptions,
+  ) => {
+    const { runtimeMode, modelSelection: defaultModelSelection } = input.readSettings();
+    const modelSelection = options?.modelSelectionOverride ?? defaultModelSelection;
     const targetThreadId = newThreadId();
     const fork = await forkSideChat({
       environmentId: threadRef.environmentId,
-      // oxlint-disable-next-line t3code/no-untranslated-copy -- stored on the server as the thread title, shared by every viewer
-      input: { sourceThreadId: threadRef.threadId, targetThreadId, title: "Side chat" },
+      input: {
+        sourceThreadId: threadRef.threadId,
+        targetThreadId,
+        // oxlint-disable-next-line t3code/no-untranslated-copy -- stored on the server as the thread title, shared by every viewer
+        title: options?.titleOverride ?? "Side chat",
+      },
     });
     if (fork._tag === "Failure") {
       reportFailure(fork, m(msg("Could not start a side chat.")));
@@ -123,11 +137,11 @@ export function useSideChat(input: {
     useRightPanelStore.getState().openThread(threadRef, targetThreadId);
     return true;
   };
-  const open = async (message?: SideChatMessage) => {
+  const open = async (message?: SideChatMessage, options?: SideChatOpenOptions) => {
     const { threadRef } = input;
     if (!threadRef || pendingRef.current) return false;
     pendingRef.current = true;
-    return start(threadRef, message).finally(() => {
+    return start(threadRef, message, options).finally(() => {
       pendingRef.current = false;
     });
   };

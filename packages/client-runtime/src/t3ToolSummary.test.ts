@@ -147,4 +147,25 @@ describe("summarizeT3ToolCalls", () => {
       failedCount: 0,
     });
   });
+
+  it("summarizes x_research and x_read_post calls", () => {
+    expect(
+      summarizeT3ToolCalls("x-research", [
+        completed({ query: "expo widgets" }, { answer: "summary" }),
+        completed({ query: "swiftdata" }, { isError: true }),
+      ]),
+    ).toEqual({
+      label: "Researched on X 1 time",
+      failedCount: 1,
+    });
+    expect(
+      summarizeT3ToolCalls("x-read-post", [
+        completed({ url: "https://x.com/jack/status/20" }, { id: "20" }),
+        completed({ url: "https://x.com/expo/status/101" }, { id: "101" }),
+      ]),
+    ).toEqual({
+      label: "Read 2 X posts",
+      failedCount: 0,
+    });
+  });
 });

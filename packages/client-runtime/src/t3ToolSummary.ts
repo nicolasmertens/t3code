@@ -850,6 +850,39 @@ export function summarizeT3ToolCalls(
           );
       break;
     }
+    case "x-research": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg(
+              "{count, plural, one {Researched on X {count} time} other {Researched on X {count} times}}",
+              { count },
+            ),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to research on X {count} time} other {Tried to research on X {count} times}}",
+              { count },
+            ),
+          );
+      break;
+    }
+    case "x-read-post": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg("{count, plural, one {Read {count} X post} other {Read {count} X posts}}", {
+              count,
+            }),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to read {count} X post} other {Tried to read {count} X posts}}",
+              { count },
+            ),
+          );
+      break;
+    }
     case "thread-list": {
       const count = selected.length;
       label = done

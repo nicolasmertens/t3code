@@ -74,6 +74,7 @@ export function useComposerMenuItems({
   threadPullRequests,
   sideChatAvailable,
   sideChatDisabledReason,
+  xResearchSideChatDisabledReason = null,
   freshSessionAvailable,
   compactSlashCommandAvailable,
   selectedProvider,
@@ -94,6 +95,7 @@ export function useComposerMenuItems({
   readonly threadPullRequests: ReadonlyArray<ThreadPullRequestLink> | undefined;
   readonly sideChatAvailable: boolean;
   readonly sideChatDisabledReason: string | null;
+  readonly xResearchSideChatDisabledReason?: string | null;
   readonly freshSessionAvailable: boolean;
   readonly compactSlashCommandAvailable: boolean;
   readonly selectedProvider: ProviderDriverKind;
@@ -277,6 +279,16 @@ export function useComposerMenuItems({
                 command: "btw",
                 label: "/btw",
                 description: sideChatDisabledReason ?? gt("Same as /side"),
+              },
+              {
+                id: "slash:x",
+                type: "slash-command",
+                command: "x",
+                label: "/x",
+                description:
+                  xResearchSideChatDisabledReason ??
+                  sideChatDisabledReason ??
+                  gt("Research on X in a Grok side chat"),
               },
             ] as const)
           : []),

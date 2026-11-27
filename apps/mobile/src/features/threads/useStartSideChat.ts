@@ -54,7 +54,11 @@ export function useStartSideChat() {
   return async (
     source: ScopedThreadRef,
     message: SideChatMessage,
-    settings: { readonly runtimeMode: RuntimeMode; readonly modelSelection: ModelSelection },
+    settings: {
+      readonly runtimeMode: RuntimeMode;
+      readonly modelSelection: ModelSelection;
+      readonly titleOverride?: string | undefined;
+    },
   ): Promise<boolean> => {
     const targetThreadId = ThreadId.make(uuidv4());
     const fork = await forkSideChat({
@@ -62,7 +66,7 @@ export function useStartSideChat() {
       input: {
         sourceThreadId: source.threadId,
         targetThreadId,
-        title: m(msg("Side chat")),
+        title: settings.titleOverride ?? m(msg("Side chat")),
         creationSource: "mobile",
       },
     });

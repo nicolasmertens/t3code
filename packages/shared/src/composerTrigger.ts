@@ -180,3 +180,9 @@ export function parseSideChatCommand(text: string): { prompt: string } | null {
   const match = /^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(text.trim());
   return match ? { prompt: match[1]?.trim() ?? "" } : null;
 }
+
+/** `/x [prompt]` as the whole message opens an X Research Grok side chat. */
+export function parseXResearchCommand(text: string): { prompt: string } | null {
+  const match = /^\/x(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  return match ? { prompt: match[1]?.trim() ?? "" } : null;
+}
