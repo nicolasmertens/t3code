@@ -34,3 +34,30 @@ it.each([
   expect(config.ios?.associatedDomains).toEqual([]);
   expect(config.ios?.infoPlist?.UIBackgroundModes).toEqual(["audio", "remote-notification"]);
 });
+
+it("registers the configurable stack-ready BrowneHub widget for iOS", async () => {
+  const config = await loadConfig("production");
+  const widgetsEntry = config.plugins?.find(
+    (plugin): plugin is [string, { widgets?: Array<Record<string, unknown>> }] =>
+      Array.isArray(plugin) && plugin[0] === "expo-widgets",
+  );
+  expect(widgetsEntry).toBeDefined();
+  const hub = widgetsEntry?.[1]?.widgets?.find((widget) => widget.name === "BrowneHub") as
+    | {
+        ios?: {
+          supportedFamilies?: string[];
+          initialLayout?: string;
+          configuration?: { parameters?: Record<string, { dynamic?: boolean; default?: unknown }> };
+        };
+      }
+    | undefined;
+  expect(hub?.ios?.supportedFamilies).toEqual([
+    "systemSmall",
+    "systemMedium",
+    "systemLarge",
+    "accessoryRectangular",
+  ]);
+  expect(hub?.ios?.initialLayout).toBe("./src/widgets/BrowneHubWidget.tsx");
+  expect(hub?.ios?.configuration?.parameters?.projectKey?.dynamic).toBe(true);
+  expect(hub?.ios?.configuration?.parameters?.viewMode?.default).toBe("auto");
+});

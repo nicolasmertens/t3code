@@ -143,6 +143,47 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
     enableAndroid: true,
     widgets: [
       {
+        name: "BrowneHub",
+        displayName: "Browne Hub",
+        description: "Quick actions, urgent alerts, live stats, and project topics for Browne.",
+        android: null,
+        ios: {
+          supportedFamilies: ["systemSmall", "systemMedium", "systemLarge", "accessoryRectangular"],
+          initialLayout: "./src/widgets/BrowneHubWidget.tsx",
+          configuration: {
+            title: "Browne Hub",
+            description:
+              "Stack multiple widgets to swipe vertically, or pin a widget to a specific project or view.",
+            parameters: {
+              viewMode: {
+                title: "View",
+                type: "enum",
+                default: "auto",
+                values: [
+                  { name: "Auto (Urgent Takeover)", value: "auto" },
+                  { name: "Command & Actions", value: "command" },
+                  { name: "Latest & Stats", value: "latest" },
+                  { name: "Running Agents", value: "running" },
+                  { name: "Fleet & Mail", value: "fleet" },
+                ],
+              },
+              projectKey: {
+                title: "Project",
+                type: "enum",
+                dynamic: true,
+                default: "all",
+                values: [{ name: "All projects", value: "all" }],
+              },
+              urgentTakeover: {
+                title: "Urgent takeover",
+                type: "boolean",
+                default: true,
+              },
+            },
+          },
+        },
+      },
+      {
         name: "SubscriptionUsage",
         displayName: "Subscription usage",
         description: "Subscription quotas from your connected Browne environments.",
