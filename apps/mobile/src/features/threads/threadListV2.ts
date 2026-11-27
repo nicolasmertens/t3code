@@ -519,6 +519,7 @@ export interface ThreadListV2ProjectFolderListItem {
   readonly totalCount: number;
   readonly rollup: SidebarGroupRollup;
   readonly canOrganize: boolean;
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
 }
 
 export interface ThreadListV2StatusGroupListItem {
@@ -542,6 +543,7 @@ export interface ThreadListV2ShelfProjectFolderListItem {
   readonly isScratch: boolean;
   readonly collapsed: boolean;
   readonly totalCount: number;
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
 }
 
 export interface ThreadListV2TriageEmptyListItem {
@@ -612,6 +614,13 @@ export function isThreadListV2ListItem(value: {
   );
 }
 
+function threadsEqual(
+  left: ReadonlyArray<EnvironmentThreadShell>,
+  right: ReadonlyArray<EnvironmentThreadShell>,
+): boolean {
+  return left.length === right.length && left.every((thread, index) => thread === right[index]);
+}
+
 function rollupsEqual(left: SidebarGroupRollup, right: SidebarGroupRollup): boolean {
   return (
     left.attention === right.attention &&
@@ -669,7 +678,8 @@ export function threadListV2ListItemsAreEqual(
         previous.doneOnly === item.doneOnly &&
         previous.totalCount === item.totalCount &&
         previous.canOrganize === item.canOrganize &&
-        rollupsEqual(previous.rollup, item.rollup)
+        rollupsEqual(previous.rollup, item.rollup) &&
+        threadsEqual(previous.threads, item.threads)
       );
     case "v2-status-group":
       return (
@@ -692,7 +702,8 @@ export function threadListV2ListItemsAreEqual(
         previous.representative === item.representative &&
         previous.isScratch === item.isScratch &&
         previous.collapsed === item.collapsed &&
-        previous.totalCount === item.totalCount
+        previous.totalCount === item.totalCount &&
+        threadsEqual(previous.threads, item.threads)
       );
     case "v2-triage-empty":
       return previous.type === "v2-triage-empty" && previous.filter === item.filter;
@@ -857,6 +868,7 @@ function appendShelfProjectEntries(input: {
       isScratch: folder.group.isScratch,
       collapsed,
       totalCount: folder.threads.length,
+      threads: folder.threads.map((wrapped) => wrapped.entry.item.thread),
     });
     if (!collapsed) {
       for (const wrapped of folder.threads) {
@@ -1065,6 +1077,7 @@ export function buildThreadListV2ListState(input: BuildThreadListV2ListItemsInpu
           doneOnly,
           totalCount: folder.threads.length,
           rollup,
+          threads: folder.threads.map((entry) => entry.item.thread),
           canOrganize:
             folder.scope.isScratch &&
             input.canOrganizeNoProject === true &&

@@ -7,8 +7,11 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import type { SidebarStatusBucketKey } from "@t3tools/client-runtime/state/sidebar-grouping";
-import { AuthOrchestrationOperateScope, ProjectId } from "@t3tools/contracts";
+import {
+  partitionSnoozeableFolderThreads,
+  type SidebarStatusBucketKey,
+} from "@t3tools/client-runtime/state/sidebar-grouping";
+import { AuthOrchestrationOperateScope, ProjectId, type EnvironmentId } from "@t3tools/contracts";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
@@ -27,7 +30,7 @@ import { useNowAfter } from "../../lib/clock";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { copyThreadReference } from "../../lib/copyThreadReference";
-import { useEnvironmentScope } from "../../state/session";
+import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { threadCanArchive } from "../home/threadArchive";
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { moveThreadToProject, useMoveThreadProjectTargets } from "./moveThreadToProject";
@@ -507,20 +510,130 @@ export const ThreadListV2PinnedStrip = memo(function ThreadListV2PinnedStrip(pro
   );
 });
 
+function ProjectFolderSnoozeAction(props: {
+  readonly projectTitle: string;
+  readonly snoozeableThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly now: string;
+  readonly snoozePresets: ReadonlyArray<SnoozePresetSetting> | undefined;
+  readonly iconTintClassName: string;
+  readonly onSnoozeThreads: (
+    threads: readonly EnvironmentThreadShell[],
+    snoozedUntil: string,
+  ) => void;
+}) {
+  const gt = useGT();
+  const m = useMessages();
+  const [customSnoozeOpen, setCustomSnoozeOpen] = useState(false);
+
+  const displayedPresets = resolveThreadListV2SnoozePresets(
+    {
+      secondary: "snooze",
+      now: props.now,
+      presets: props.snoozePresets,
+    },
+    m,
+  );
+
+  const snoozeMenuActions = useMemo<MenuAction[]>(
+    () => [
+      ...displayedPresets.map((preset) => ({
+        id: `snooze:${preset.id}`,
+        title: preset.label,
+        subtitle: preset.whenLabel,
+      })),
+      { id: "snooze:custom", title: gt("Custom…", { $context: "custom snooze time" }) },
+    ],
+    [displayedPresets, gt],
+  );
+
+  const handlePressAction = ({
+    nativeEvent,
+  }: {
+    readonly nativeEvent: { readonly event: string };
+  }) => {
+    if (nativeEvent.event === "snooze:custom") {
+      setCustomSnoozeOpen(true);
+      return;
+    }
+    const selection = resolveThreadListV2SnoozeMenuSelection({
+      event: nativeEvent.event,
+      displayedPresets,
+      now: new Date(),
+      presets: props.snoozePresets,
+    });
+    if (selection._tag === "selected") {
+      props.onSnoozeThreads(props.snoozeableThreads, selection.preset.snoozedUntil);
+    } else if (selection._tag === "expired") {
+      Dialog.alert(
+        gt("Could not snooze thread"),
+        gt("That snooze time has passed. Choose another time."),
+      );
+    }
+  };
+
+  return (
+    <>
+      {customSnoozeOpen ? (
+        <CustomSnoozeSheet
+          onClose={() => setCustomSnoozeOpen(false)}
+          onSnooze={(snoozedUntil) => props.onSnoozeThreads(props.snoozeableThreads, snoozedUntil)}
+        />
+      ) : null}
+      <Menu
+        title={gt("Snooze {project}", { project: props.projectTitle })}
+        actions={snoozeMenuActions}
+        onPressAction={handlePressAction}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={gt("Snooze {project}", { project: props.projectTitle })}
+          hitSlop={6}
+          className="size-7 items-center justify-center rounded-full active:opacity-60"
+        >
+          <SymbolView
+            name="clock"
+            size={14}
+            tintColorClassName={props.iconTintClassName}
+            type="monochrome"
+          />
+        </Pressable>
+      </Menu>
+    </>
+  );
+}
+
 export const ThreadListV2ProjectFolderHeader = memo(
   function ThreadListV2ProjectFolderHeader(props: {
     readonly item: ThreadListV2ProjectFolderListItem;
     readonly pane?: "screen" | "sidebar";
+    readonly now: string;
+    readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
+    readonly snoozePresetsByEnvironmentId?: ReadonlyMap<
+      EnvironmentId,
+      readonly SnoozePresetSetting[]
+    >;
     readonly onToggle: (projectKey: string, doneOnly: boolean, collapsed: boolean) => void;
     readonly onOrganize?: () => void;
     readonly onNewThreadInProject?: (project: EnvironmentProject) => void;
+    readonly onSnoozeThreads?: (
+      threads: readonly EnvironmentThreadShell[],
+      snoozedUntil: string,
+    ) => void;
   }) {
-    const { item } = props;
+    const { item, now } = props;
     const gt = useGT();
     const sidebarPane = props.pane === "sidebar";
     const mutedIcon = sidebarPane ? "accent-drawer-foreground-muted" : "accent-foreground-muted";
     const mutedText = sidebarPane ? "text-drawer-foreground-muted" : "text-foreground-muted";
     const tertiaryText = sidebarPane ? "text-drawer-foreground-muted" : "text-foreground-tertiary";
+    useEnvironmentScope(item.representative.environmentId, AuthOrchestrationOperateScope);
+    const { snoozeable } = partitionSnoozeableFolderThreads(item.threads, {
+      now,
+      supportsSnooze: (environmentId) => props.snoozeEnvironmentIds?.has(environmentId) ?? false,
+      canOperate: (environmentId) =>
+        readEnvironmentScope(environmentId, AuthOrchestrationOperateScope),
+    });
+    const snoozeEnvId = snoozeable[0]?.environmentId ?? item.representative.environmentId;
 
     return (
       <View
@@ -605,6 +718,16 @@ export const ThreadListV2ProjectFolderHeader = memo(
               {gt("Organize", { $context: "verb, organize ungrouped threads" })}
             </Text>
           </Pressable>
+        ) : null}
+        {snoozeable.length > 0 && props.onSnoozeThreads ? (
+          <ProjectFolderSnoozeAction
+            projectTitle={item.title}
+            snoozeableThreads={snoozeable}
+            now={now}
+            snoozePresets={props.snoozePresetsByEnvironmentId?.get(snoozeEnvId)}
+            iconTintClassName={mutedIcon}
+            onSnoozeThreads={props.onSnoozeThreads}
+          />
         ) : null}
         {props.onNewThreadInProject ? (
           <Pressable
@@ -702,51 +825,106 @@ export const ThreadListV2StatusGroupHeader = memo(function ThreadListV2StatusGro
 export const ThreadListV2ShelfProjectHeader = memo(function ThreadListV2ShelfProjectHeader(props: {
   readonly item: ThreadListV2ShelfProjectFolderListItem;
   readonly pane?: "screen" | "sidebar";
+  readonly now: string;
+  readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
+  readonly snoozePresetsByEnvironmentId?: ReadonlyMap<
+    EnvironmentId,
+    readonly SnoozePresetSetting[]
+  >;
   readonly onToggle: (
     shelf: ThreadListV2ShelfProjectFolderListItem["shelf"],
     projectKey: string,
   ) => void;
+  readonly onSnoozeThreads?: (
+    threads: readonly EnvironmentThreadShell[],
+    snoozedUntil: string,
+  ) => void;
+  readonly onWakeThreads?: (threads: readonly EnvironmentThreadShell[]) => void;
 }) {
-  const { item } = props;
+  const { item, now } = props;
+  const gt = useGT();
   const sidebarPane = props.pane === "sidebar";
   const mutedIcon = sidebarPane ? "accent-drawer-foreground-muted" : "accent-foreground-tertiary";
   const mutedText = sidebarPane ? "text-drawer-foreground-muted" : "text-foreground-muted";
   const tertiaryText = sidebarPane ? "text-drawer-foreground-muted" : "text-foreground-tertiary";
+  useEnvironmentScope(item.representative.environmentId, AuthOrchestrationOperateScope);
+  const { snoozeable } =
+    item.shelf === "working"
+      ? partitionSnoozeableFolderThreads(item.threads, {
+          now,
+          supportsSnooze: (environmentId) =>
+            props.snoozeEnvironmentIds?.has(environmentId) ?? false,
+          canOperate: (environmentId) =>
+            readEnvironmentScope(environmentId, AuthOrchestrationOperateScope),
+        })
+      : { snoozeable: [] as EnvironmentThreadShell[] };
+  const snoozeEnvId = snoozeable[0]?.environmentId ?? item.representative.environmentId;
+  const wakeable =
+    item.shelf === "snoozed"
+      ? item.threads.filter(
+          (thread) =>
+            (props.snoozeEnvironmentIds?.has(thread.environmentId) ?? false) &&
+            readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope),
+        )
+      : [];
+  const showSnooze =
+    item.shelf === "working" && snoozeable.length > 0 && Boolean(props.onSnoozeThreads);
+  const showWake = item.shelf === "snoozed" && wakeable.length > 0 && Boolean(props.onWakeThreads);
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ expanded: !item.collapsed }}
-      accessibilityLabel={`${item.title}, ${item.totalCount}`}
-      className={cn(
-        "flex-row items-center gap-2 py-1.5 active:opacity-60",
-        sidebarPane ? "pl-4 pr-2" : "pl-7 pr-4",
-      )}
-      onPress={() => props.onToggle(item.shelf, item.projectKey)}
-    >
-      <SymbolView
-        name={item.collapsed ? "chevron.right" : "chevron.down"}
-        size={10}
-        tintColorClassName={mutedIcon}
-        type="monochrome"
-      />
-      {item.isScratch ? (
-        <SymbolView name="folder" size={13} tintColorClassName={mutedIcon} type="monochrome" />
-      ) : (
-        <ProjectFavicon
-          environmentId={item.representative.environmentId}
-          faviconPath={item.representative.faviconPath}
-          projectIcon={item.representative.projectIcon}
-          size={14}
-          projectTitle={item.title}
-          workspaceRoot={item.representative.workspaceRoot}
+    <View className={cn("flex-row items-center gap-1.5", sidebarPane ? "pl-4 pr-2" : "pl-7 pr-4")}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: !item.collapsed }}
+        accessibilityLabel={`${item.title}, ${item.totalCount}`}
+        className="min-w-0 flex-1 flex-row items-center gap-2 py-1.5 active:opacity-60"
+        onPress={() => props.onToggle(item.shelf, item.projectKey)}
+      >
+        <SymbolView
+          name={item.collapsed ? "chevron.right" : "chevron.down"}
+          size={10}
+          tintColorClassName={mutedIcon}
+          type="monochrome"
         />
-      )}
-      <Text numberOfLines={1} className={cn("min-w-0 shrink text-xs font-t3-medium", mutedText)}>
-        {item.title}
-      </Text>
-      <Text className={cn("text-xs tabular-nums", tertiaryText)}>{item.totalCount}</Text>
-    </Pressable>
+        {item.isScratch ? (
+          <SymbolView name="folder" size={13} tintColorClassName={mutedIcon} type="monochrome" />
+        ) : (
+          <ProjectFavicon
+            environmentId={item.representative.environmentId}
+            faviconPath={item.representative.faviconPath}
+            projectIcon={item.representative.projectIcon}
+            size={14}
+            projectTitle={item.title}
+            workspaceRoot={item.representative.workspaceRoot}
+          />
+        )}
+        <Text numberOfLines={1} className={cn("min-w-0 shrink text-xs font-t3-medium", mutedText)}>
+          {item.title}
+        </Text>
+        <Text className={cn("text-xs tabular-nums", tertiaryText)}>{item.totalCount}</Text>
+      </Pressable>
+      {showWake ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={gt("Wake {project}", { project: item.title })}
+          hitSlop={6}
+          className="size-7 items-center justify-center rounded-full active:opacity-60"
+          onPress={() => props.onWakeThreads?.(wakeable)}
+        >
+          <SymbolView name="alarm" size={14} tintColorClassName={mutedIcon} type="monochrome" />
+        </Pressable>
+      ) : null}
+      {showSnooze && props.onSnoozeThreads ? (
+        <ProjectFolderSnoozeAction
+          projectTitle={item.title}
+          snoozeableThreads={snoozeable}
+          now={now}
+          snoozePresets={props.snoozePresetsByEnvironmentId?.get(snoozeEnvId)}
+          iconTintClassName={mutedIcon}
+          onSnoozeThreads={props.onSnoozeThreads}
+        />
+      ) : null}
+    </View>
   );
 });
 

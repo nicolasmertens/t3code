@@ -4,21 +4,24 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import {
   DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
+  type LocalApi,
   ProjectId,
   ProviderInstanceId,
+  type ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../test/render";
+import { fakeTimers, render } from "../../test/render";
 import { makeThreadFixture } from "../test-fixtures";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { __setClientSettingsForTests, getClientSettings } from "../hooks/useSettings";
-import { readMoveThreadProjectTargets } from "../hooks/useThreadActions";
+import { readMoveThreadProjectTargets, useThreadActions } from "../hooks/useThreadActions";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { readLocalApi } from "../localApi";
 import { useProjects, useQuietThreadShells, useServerConfigs } from "../state/entities";
 import { useConnectedEnvironmentIds, usePrimaryEnvironmentId } from "../state/environments";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
@@ -34,6 +37,7 @@ vi.mock("../hooks/useHandleNewThread", { spy: true });
 vi.mock("../hooks/useNowMinute", { spy: true });
 vi.mock("../hooks/useThreadActions", { spy: true });
 vi.mock("../hooks/useThreadRouteTarget", { spy: true });
+vi.mock("../localApi", { spy: true });
 vi.mock("../state/session", { spy: true });
 vi.mock("../state/use-atom-command", { spy: true });
 vi.mock("../commandPaletteBus", () => ({
@@ -489,5 +493,266 @@ describe("sidebar queue grouping and triage", () => {
     await vi.waitFor(() =>
       expect(screen.container.querySelector('[data-testid="sidebar-working-header"]')).toBeNull(),
     );
+  });
+});
+
+function mockProjectSnoozeActions(stack: DisposableStack) {
+  const snoozeThread = vi.fn(async (_target: ScopedThreadRef, _snoozedUntil: string) =>
+    AsyncResult.success({ sequence: 1 }),
+  );
+  const unsnoozeThread = vi.fn(async (_target: ScopedThreadRef) =>
+    AsyncResult.success({ sequence: 1 }),
+  );
+  const prevUseThreadActions = vi.mocked(useThreadActions).getMockImplementation();
+  stack.defer(() => {
+    if (prevUseThreadActions) {
+      vi.mocked(useThreadActions).mockImplementation(prevUseThreadActions);
+    }
+  });
+  vi.mocked(useThreadActions).mockImplementation(() => ({
+    ...(prevUseThreadActions
+      ? prevUseThreadActions()
+      : ({} as ReturnType<typeof useThreadActions>)),
+    snoozeThread,
+    unsnoozeThread,
+  }));
+  return { snoozeThread, unsnoozeThread };
+}
+
+function mockSidebarContextMenu(stack: DisposableStack, selectedId: string | null = null) {
+  const show = vi.fn().mockResolvedValue(selectedId);
+  const prevReadLocalApi = vi.mocked(readLocalApi).getMockImplementation();
+  stack.defer(() => {
+    if (prevReadLocalApi) {
+      vi.mocked(readLocalApi).mockImplementation(prevReadLocalApi);
+    }
+  });
+  vi.mocked(readLocalApi).mockReturnValue({ contextMenu: { show } } as unknown as LocalApi);
+  return show;
+}
+
+describe("sidebar project folder snooze and wake", () => {
+  it("snoozes a collapsed project folder via hover SnoozePopover Tomorrow", async () => {
+    using stack = new DisposableStack();
+    using _timers = fakeTimers({ now: new Date("2026-03-10T12:00:00.000Z") });
+    const fleet = makeProject("fleet", "Fleet");
+    const mubo = makeProject("mubo", "Mubo");
+    const routeThread = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-fleet"),
+      projectId: fleet.id,
+      title: "Fleet Task",
+      latestUserMessageAt: "2026-03-10T11:55:00.000Z",
+    });
+    const mubo1 = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-mubo-1"),
+      projectId: mubo.id,
+      title: "Mubo One",
+      latestUserMessageAt: "2026-03-10T11:50:00.000Z",
+    });
+    const mubo2 = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-mubo-2"),
+      projectId: mubo.id,
+      title: "Mubo Two",
+      latestUserMessageAt: "2026-03-10T11:45:00.000Z",
+    });
+
+    setupSidebarMocks(stack, [fleet, mubo], [routeThread, mubo1, mubo2], routeThread);
+    const { snoozeThread } = mockProjectSnoozeActions(stack);
+    useUiStateStore.setState({ sidebarGroupMode: "project" });
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+
+    const muboFolder = screen
+      .getByTestId("sidebar-project-folder")
+      .filter({ hasText: "Mubo" })
+      .first();
+    await expect.element(muboFolder).toBeVisible();
+    // Collapse Mubo so its threads are hidden, then hover its header snooze button.
+    await userEvent.click(muboFolder.getByRole("button", { name: /Mubo/ }).first());
+    expect(screen.container.textContent).not.toContain("Mubo One");
+
+    await userEvent.hover(muboFolder);
+    await userEvent.click(muboFolder.getByTestId("sidebar-project-folder-snooze"));
+    await expect
+      .element(page.getByRole("tab", { name: "Interval" }))
+      .toHaveAttribute("aria-selected", "true");
+    await userEvent.click(page.getByRole("button", { name: /Tomorrow/ }));
+
+    await vi.waitFor(() => expect(snoozeThread).toHaveBeenCalledTimes(2));
+    const snoozedIds = snoozeThread.mock.calls.map(([ref]) => ref.threadId);
+    expect(snoozedIds).toEqual(expect.arrayContaining([mubo1.id, mubo2.id]));
+  });
+
+  it("snoozes an expanded project folder via hover SnoozePopover", async () => {
+    using stack = new DisposableStack();
+    using _timers = fakeTimers({ now: new Date("2026-03-10T12:00:00.000Z") });
+    const fleet = makeProject("fleet", "Fleet");
+    const mubo = makeProject("mubo", "Mubo");
+    const routeThread = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-fleet"),
+      projectId: fleet.id,
+      title: "Fleet Task",
+      latestUserMessageAt: "2026-03-10T11:55:00.000Z",
+    });
+    const mubo1 = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-mubo-exp-1"),
+      projectId: mubo.id,
+      title: "Expanded Mubo One",
+      latestUserMessageAt: "2026-03-10T11:50:00.000Z",
+    });
+
+    setupSidebarMocks(stack, [fleet, mubo], [routeThread, mubo1], routeThread);
+    const { snoozeThread } = mockProjectSnoozeActions(stack);
+    useUiStateStore.setState({ sidebarGroupMode: "project" });
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+
+    await expect.element(screen.getByText("Expanded Mubo One")).toBeVisible();
+    const muboFolder = screen
+      .getByTestId("sidebar-project-folder")
+      .filter({ hasText: "Mubo" })
+      .first();
+    await userEvent.hover(muboFolder);
+    await userEvent.click(muboFolder.getByTestId("sidebar-project-folder-snooze"));
+    await userEvent.click(page.getByRole("button", { name: /Tomorrow/ }));
+
+    await vi.waitFor(() => expect(snoozeThread).toHaveBeenCalledTimes(1));
+    expect(snoozeThread.mock.calls[0]?.[0]).toEqual(scopeThreadRef(ENV, mubo1.id));
+  });
+
+  it("snoozes eligible threads via context menu while skipping approval-blocked threads", async () => {
+    using stack = new DisposableStack();
+    using _timers = fakeTimers({ now: new Date("2026-03-10T12:00:00.000Z") });
+    const fleet = makeProject("fleet", "Fleet");
+    const mubo = makeProject("mubo", "Mubo");
+    const routeThread = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-fleet"),
+      projectId: fleet.id,
+      title: "Fleet Task",
+    });
+    const eligible = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-mubo-ok"),
+      projectId: mubo.id,
+      title: "Mubo Eligible",
+      latestUserMessageAt: "2026-03-10T11:50:00.000Z",
+    });
+    const blocked = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-mubo-blocked"),
+      projectId: mubo.id,
+      title: "Mubo Approval",
+      hasPendingApprovals: true,
+      latestUserMessageAt: "2026-03-10T11:52:00.000Z",
+    });
+
+    setupSidebarMocks(stack, [fleet, mubo], [routeThread, eligible, blocked], routeThread);
+    const { snoozeThread } = mockProjectSnoozeActions(stack);
+    const showMenu = mockSidebarContextMenu(stack, "snooze-project:tomorrow");
+    useUiStateStore.setState({ sidebarGroupMode: "project" });
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+
+    const muboHeader = screen
+      .getByTestId("sidebar-project-folder")
+      .filter({ hasText: "Mubo" })
+      .getByRole("button", { name: /Mubo/ })
+      .first();
+    await userEvent.click(muboHeader, { button: "right" });
+
+    await vi.waitFor(() => expect(showMenu).toHaveBeenCalledTimes(1));
+    const menuItems = showMenu.mock.calls[0]?.[0] as ReadonlyArray<{
+      readonly id: string;
+      readonly label: string;
+    }>;
+    expect(menuItems.find((item) => item.id === "snooze-project")?.label).toBe(
+      "Snooze project (1)",
+    );
+
+    await vi.waitFor(() => expect(snoozeThread).toHaveBeenCalledTimes(1));
+    expect(snoozeThread.mock.calls[0]?.[0]).toEqual(scopeThreadRef(ENV, eligible.id));
+  });
+
+  it("wakes all snoozed threads in a collapsed Snoozed project via hover Wake button and context menu", async () => {
+    using stack = new DisposableStack();
+    const fleet = makeProject("fleet", "Fleet");
+    const mubo = makeProject("mubo", "Mubo");
+    const routeThread = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-fleet"),
+      projectId: fleet.id,
+      title: "Fleet Task",
+    });
+    const snoozed1 = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-mubo-snoozed-1"),
+      projectId: mubo.id,
+      title: "Snoozed Mubo 1",
+      snoozedAt: "2026-03-10T11:00:00.000Z",
+      snoozedUntil: "2099-03-10T15:00:00.000Z",
+    });
+    const snoozed2 = makeThreadFixture({
+      environmentId: ENV,
+      id: ThreadId.make("t-mubo-snoozed-2"),
+      projectId: mubo.id,
+      title: "Snoozed Mubo 2",
+      snoozedAt: "2026-03-10T11:00:00.000Z",
+      snoozedUntil: "2099-03-10T15:00:00.000Z",
+    });
+
+    setupSidebarMocks(stack, [fleet, mubo], [routeThread, snoozed1, snoozed2], routeThread);
+    const { unsnoozeThread } = mockProjectSnoozeActions(stack);
+    const showMenu = mockSidebarContextMenu(stack, "wake-project");
+    useUiStateStore.setState({ sidebarGroupMode: "project" });
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+
+    await userEvent.click(screen.getByTestId("sidebar-snoozed-shelf-toggle"));
+    const snoozedMubo = screen
+      .getByTestId("sidebar-snoozed-project-folder")
+      .filter({ hasText: "Mubo" })
+      .first();
+    await expect.element(snoozedMubo).toBeVisible();
+    // Collapse the Snoozed Mubo sub-folder and wake via the hover button.
+    await userEvent.click(snoozedMubo.getByRole("button", { name: /Mubo/ }).first());
+    expect(screen.container.textContent).not.toContain("Snoozed Mubo 1");
+
+    await userEvent.hover(snoozedMubo);
+    await userEvent.click(snoozedMubo.getByTestId("sidebar-shelf-folder-wake"));
+    await vi.waitFor(() => expect(unsnoozeThread).toHaveBeenCalledTimes(2));
+
+    // Context menu on the Snoozed Mubo sub-folder also exposes Wake project (2).
+    await userEvent.click(snoozedMubo.getByRole("button", { name: /Mubo/ }).first(), {
+      button: "right",
+    });
+    await vi.waitFor(() => expect(showMenu).toHaveBeenCalledTimes(1));
+    const menuItems = showMenu.mock.calls[0]?.[0] as ReadonlyArray<{
+      readonly id: string;
+      readonly label: string;
+    }>;
+    expect(menuItems.find((item) => item.id === "wake-project")?.label).toBe("Wake project (2)");
+    await vi.waitFor(() => expect(unsnoozeThread).toHaveBeenCalledTimes(4));
   });
 });

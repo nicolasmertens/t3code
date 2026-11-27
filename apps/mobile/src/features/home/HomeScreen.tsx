@@ -387,6 +387,15 @@ export function HomeScreen(props: HomeScreenProps) {
   const handleSettleThread = props.onSettleThread;
   const handleSnoozeThread = props.onSnoozeThread;
   const handleUnsnoozeThread = props.onUnsnoozeThread;
+  const handleSnoozeProjectThreads = (
+    threads: readonly EnvironmentThreadShell[],
+    snoozedUntil: string,
+  ) => {
+    void Promise.all(threads.map((thread) => handleSnoozeThread(thread, snoozedUntil)));
+  };
+  const handleWakeProjectThreads = (threads: readonly EnvironmentThreadShell[]) => {
+    void Promise.all(threads.map((thread) => handleUnsnoozeThread(thread)));
+  };
   const handlePinThread = props.onPinThread;
   const handleMoveThread = props.onMoveThread;
   const handleUnpinThread = props.onUnpinThread;
@@ -579,9 +588,13 @@ export function HomeScreen(props: HomeScreenProps) {
         <ThreadListV2ProjectFolderHeader
           item={item}
           pane={sidebarSurface ? "sidebar" : "screen"}
+          now={now}
+          snoozeEnvironmentIds={snoozeEnvironmentIds}
+          snoozePresetsByEnvironmentId={snoozePresetsByEnvironmentId}
           onToggle={toggleProjectFolder}
           onOrganize={() => setOrganizeSheetOpen(true)}
           onNewThreadInProject={props.onNewThreadInProject}
+          onSnoozeThreads={handleSnoozeProjectThreads}
         />
       );
     }
@@ -599,7 +612,12 @@ export function HomeScreen(props: HomeScreenProps) {
         <ThreadListV2ShelfProjectHeader
           item={item}
           pane={sidebarSurface ? "sidebar" : "screen"}
+          now={now}
+          snoozeEnvironmentIds={snoozeEnvironmentIds}
+          snoozePresetsByEnvironmentId={snoozePresetsByEnvironmentId}
           onToggle={grouping.toggleShelfProjectFolder}
+          onSnoozeThreads={handleSnoozeProjectThreads}
+          onWakeThreads={handleWakeProjectThreads}
         />
       );
     }

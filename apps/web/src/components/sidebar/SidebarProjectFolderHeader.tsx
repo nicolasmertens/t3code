@@ -1,19 +1,22 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { ContextMenuSource } from "@t3tools/contracts";
+import type { ContextMenuSource, EnvironmentId } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { useDroppable } from "@dnd-kit/core";
 import { ChevronDownIcon, SquarePenIcon } from "lucide-react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
-import { memo } from "react";
+import { memo, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { contextMenuSourceOf } from "../../contextMenuSource";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useUiStateStore } from "../../uiStateStore";
 import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
+import type { SnoozePreset } from "../Sidebar.snooze";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SnoozePopover } from "./SnoozePopover";
 import { computeSidebarGroupRollup, sidebarFolderDropId } from "./sidebarGrouping.logic";
 
 const FOLDER_DOT_LABEL = {
@@ -40,10 +43,16 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   totalCount: number;
   hiddenThreads: readonly EnvironmentThreadShell[];
   snoozeNow: string;
+  timestampFormat: TimestampFormat;
+  snoozeEnvironmentId?: EnvironmentId | undefined;
+  canSnooze?: boolean | undefined;
   canAcceptThreadDrop?: boolean | undefined;
   onOrganize?: (() => void) | undefined;
   onToggle: (group: SidebarProjectSnapshot) => void;
   onNewThread: (group: SidebarProjectSnapshot) => void;
+  onSnooze?:
+    | ((group: SidebarProjectSnapshot, preset: Pick<SnoozePreset, "snoozedUntil">) => void)
+    | undefined;
   onContextMenu: (
     group: SidebarProjectSnapshot,
     position: { x: number; y: number },
@@ -53,6 +62,7 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   const gt = useGT();
   const m = useMessages();
   const { group, collapsed, totalCount, hiddenThreads, snoozeNow } = props;
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const rowId = sidebarFolderRowId(group.projectKey);
   const localLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
   const { setNodeRef: setDropNodeRef, isOver } = useDroppable({
@@ -80,6 +90,26 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   const hasRollupPills =
     rollup !== null && (urgentRollupCount > 0 || rollup.working > 0 || rollup.done > 0);
   const showOrganize = Boolean(group.isScratch && !collapsed && totalCount > 0 && props.onOrganize);
+  const showSnooze = Boolean(props.canSnooze && props.snoozeEnvironmentId && props.onSnooze);
+  const excludeProjectKeys = new Set(
+    group.memberProjectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`),
+  );
+  const snoozeTrigger = showSnooze ? (
+    <SnoozePopover
+      open={snoozeOpen}
+      onOpenChange={setSnoozeOpen}
+      onSnooze={(preset) => props.onSnooze?.(group, preset)}
+      timestampFormat={props.timestampFormat}
+      environmentId={props.snoozeEnvironmentId!}
+      defaultTab="interval"
+      excludeProjectKeys={excludeProjectKeys}
+      triggerVariant="folder-header"
+      actionForRowId={rowId}
+      testId="sidebar-project-folder-snooze"
+      ariaLabel={gt("Snooze {project}", { project: group.displayName })}
+      tooltipLabel={gt("Snooze {project}", { project: group.displayName })}
+    />
+  ) : null;
 
   return (
     <li
@@ -103,6 +133,12 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
         }}
         className={cn(
           "flex h-8 w-full cursor-pointer items-center gap-2 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left outline-none transition-colors hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          !showOrganize &&
+            !isOver &&
+            (showSnooze
+              ? "group-hover/project-folder:pe-14 group-has-[[data-sidebar-action-for]:focus]/project-folder:pe-14"
+              : "group-hover/project-folder:pe-8 group-has-[[data-sidebar-action-for]:focus]/project-folder:pe-8"),
+          !showOrganize && !isOver && snoozeOpen && "pe-14",
           isOver && "bg-sidebar-row-hover ring-2 ring-inset ring-ring",
         )}
       >
@@ -128,7 +164,12 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
             <T>Move here</T>
           </span>
         ) : (
-          <span className="flex shrink-0 items-center gap-1 group-hover/project-folder:invisible group-has-[[data-sidebar-action-for]:focus]/project-folder:invisible pointer-coarse:invisible">
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-1 group-hover/project-folder:invisible group-has-[[data-sidebar-action-for]:focus]/project-folder:invisible pointer-coarse:invisible",
+              snoozeOpen && "invisible",
+            )}
+          >
             {hasRollupPills ? (
               <>
                 {rollup.failed > 0 ? (
@@ -183,7 +224,13 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
           >
             <T>Organize</T>
           </Button>
-          <span className="opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
+          <span
+            className={cn(
+              "flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100",
+              snoozeOpen && "opacity-100",
+            )}
+          >
+            {snoozeTrigger}
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -207,7 +254,13 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
           </span>
         </span>
       ) : !isOver ? (
-        <span className="absolute inset-y-0 right-1.5 flex items-center opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
+        <span
+          className={cn(
+            "absolute inset-y-0 right-1.5 flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100",
+            snoozeOpen && "opacity-100",
+          )}
+        >
+          {snoozeTrigger}
           <Tooltip>
             <TooltipTrigger
               render={

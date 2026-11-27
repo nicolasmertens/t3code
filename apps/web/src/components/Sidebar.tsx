@@ -315,6 +315,7 @@ import {
   isScratchThread,
   isSidebarGroupDoneOnly,
   parseSidebarFolderDropProjectKey,
+  partitionSnoozeableFolderThreads,
   resolveEffectiveSidebarGroupMode,
   sidebarShelfFolderRowId,
   sidebarShelfFolderStateKey,
@@ -629,11 +630,32 @@ function useSidebarThreads(input: {
         const visibleRows = collapsed
           ? routeThreadOnly(folder.threads, peekRouteThreadKey)
           : folder.threads;
+        const snoozePartition =
+          shelf === "working"
+            ? partitionSnoozeableFolderThreads(folder.threads, {
+                now: partition.snoozeNow,
+                supportsSnooze: (environmentId) => serverConfigs.has(environmentId),
+                canOperate: (environmentId) =>
+                  readEnvironmentScope(environmentId, AuthOrchestrationOperateScope),
+              })
+            : null;
+        const canWake =
+          shelf === "snoozed" &&
+          folder.threads.some(
+            (thread) =>
+              serverConfigs.has(thread.environmentId) &&
+              readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope),
+          );
         return {
           group: folder.group,
           collapsed,
           totalCount: folder.threads.length,
+          allThreads: folder.threads,
           threads: visibleRows,
+          canSnooze: (snoozePartition?.snoozeable.length ?? 0) > 0,
+          snoozeEnvironmentId:
+            snoozePartition?.snoozeable[0]?.environmentId ?? folder.group.environmentId,
+          canWake,
         };
       }),
       ungroupedThreads,
@@ -698,12 +720,21 @@ function useSidebarThreads(input: {
                     projectExpandedById,
                     sidebarFolderExpansionKeys(folder.group),
                   );
+            const folderSnoozePartition = partitionSnoozeableFolderThreads(folder.threads, {
+              now: partition.snoozeNow,
+              supportsSnooze: (environmentId) => serverConfigs.has(environmentId),
+              canOperate: (environmentId) =>
+                readEnvironmentScope(environmentId, AuthOrchestrationOperateScope),
+            });
             return {
               group: folder.group,
               doneOnly,
               collapsed,
               totalCount: folder.threads.length,
               allThreads: folder.threads,
+              canSnooze: folderSnoozePartition.snoozeable.length > 0,
+              snoozeEnvironmentId:
+                folderSnoozePartition.snoozeable[0]?.environmentId ?? folder.group.environmentId,
               // A closed folder still shows the open thread, and hints at the rest.
               threads: collapsed
                 ? routeThreadOnly(folder.threads, routeRowThreadKey)
@@ -1513,52 +1544,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const target = entry?.targetProject ?? group;
     void handleNewThread(scopeProjectRef(target.environmentId, target.id));
   });
-  const handleProjectFolderContextMenu = useStableCallback(
-    (
-      group: SidebarProjectSnapshot,
-      position: { x: number; y: number },
-      source: ContextMenuSource,
-    ) => {
-      const api = readLocalApi();
-      if (!api) return;
-      void (async () => {
-        const clicked = await settlePromise(() =>
-          api.contextMenu.show(
-            [
-              { id: "new-thread", label: gt("New thread") },
-              { id: "copy-path", label: gt("Copy path") },
-              ...(canPinProject(group)
-                ? [
-                    group.pinned
-                      ? { id: "unpin", label: gt("Unpin project"), icon: "pin-off" }
-                      : { id: "pin", label: gt("Pin project"), icon: "pin" },
-                  ]
-                : []),
-              { id: "project-settings", label: gt("Project settings"), icon: "settings" },
-            ],
-            position,
-            source,
-          ),
-        );
-        if (clicked._tag === "Failure") return;
-        switch (clicked.value) {
-          case "new-thread":
-            startThreadInProjectFolder(group);
-            return;
-          case "copy-path":
-            copyPathToClipboard(group.workspaceRoot, { path: group.workspaceRoot });
-            return;
-          case "pin":
-          case "unpin":
-            setProjectGroupPinned(group, clicked.value === "pin");
-            return;
-          case "project-settings":
-            openProjectSettings(group);
-            return;
-        }
-      })();
-    },
-  );
 
   const {
     workingShelfEnabled,
@@ -2430,6 +2415,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
   const dndSensors = useSensors(useSensor(SidebarPointerSensor, pointerSensorOptions));
   const sectionByThreadKeyRef = useRef(sectionByThreadKey);
+  const projectFoldersRef = useRef(projectFolders);
+  const workingShelfFoldersRef = useRef(workingShelfFolders);
+  const snoozedShelfFoldersRef = useRef(snoozedShelfFolders);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes committed list data to refs read by stable drag and sweep callbacks
   useLayoutEffect(() => {
     projectGroupsRef.current = projectGroups;
@@ -2443,6 +2431,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     workingThreadKeysRef.current = workingThreadKeys;
     snoozedThreadKeysRef.current = snoozedThreadKeys;
     sectionByThreadKeyRef.current = sectionByThreadKey;
+    projectFoldersRef.current = projectFolders;
+    workingShelfFoldersRef.current = workingShelfFolders;
+    snoozedShelfFoldersRef.current = snoozedShelfFolders;
   });
   const startActionSweep = useStableCallback(
     (threadRef: ScopedThreadRef, action: SidebarSweepAction, event: PointerEvent) => {
@@ -2978,7 +2969,237 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       })();
     },
   );
-
+  const readFolderThreads = (
+    group: SidebarProjectSnapshot,
+    shelf?: SidebarShelfKey,
+  ): ReadonlyArray<EnvironmentThreadShell> => {
+    const folders =
+      shelf === undefined
+        ? projectFoldersRef.current
+        : shelf === "working"
+          ? workingShelfFoldersRef.current?.folders
+          : shelf === "snoozed"
+            ? snoozedShelfFoldersRef.current?.folders
+            : undefined;
+    return (
+      folders?.find((folder) => folder.group.projectKey === group.projectKey)?.allThreads ?? []
+    );
+  };
+  const snoozeProjectThreads = useStableCallback(
+    (
+      threads: ReadonlyArray<EnvironmentThreadShell>,
+      preset: Pick<SnoozePreset, "snoozedUntil">,
+    ) => {
+      const { snoozeable } = partitionSnoozeableFolderThreads(threads, {
+        now: new Date().toISOString(),
+        supportsSnooze: (environmentId) => serverConfigsRef.current.has(environmentId),
+        canOperate: (environmentId) =>
+          readEnvironmentScope(environmentId, AuthOrchestrationOperateScope),
+      });
+      if (snoozeable.length === 0) return;
+      const coSnoozingKeys = new Set(snoozeable.map(threadShellKey));
+      void (async () => {
+        const outcomes = await Promise.all(
+          snoozeable.map((thread) =>
+            performSnooze(scopeThreadRef(thread.environmentId, thread.id), preset, {
+              coSnoozingKeys,
+            }),
+          ),
+        );
+        const snoozedCount = outcomes.filter((outcome) => outcome.status === "success").length;
+        const failures = outcomes.flatMap((outcome) =>
+          outcome.status === "failure" ? [outcome.error] : [],
+        );
+        if (failures.length > 0) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title:
+                snoozedCount > 0
+                  ? gt(
+                      "{count, plural, one {Failed to snooze {count} thread} other {Failed to snooze {count} threads}}",
+                      { count: failures.length },
+                    )
+                  : snoozeable.length === 1
+                    ? gt("Failed to snooze thread")
+                    : gt("Failed to snooze threads"),
+              description: thrownErrorMessage(failures[0], m) ?? gt("An error occurred."),
+            }),
+          );
+        }
+      })();
+    },
+  );
+  const wakeProjectThreads = useStableCallback((threads: ReadonlyArray<EnvironmentThreadShell>) => {
+    const wakeable = threads.filter(
+      (thread) =>
+        serverConfigsRef.current.has(thread.environmentId) &&
+        readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope),
+    );
+    if (wakeable.length === 0) return;
+    void (async () => {
+      const outcomes = await Promise.all(
+        wakeable.map((thread) => unsnoozeThread(scopeThreadRef(thread.environmentId, thread.id))),
+      );
+      const failures = outcomes.flatMap((result) =>
+        result._tag === "Failure" && !isAtomCommandInterrupted(result)
+          ? [squashAtomCommandFailure(result)]
+          : [],
+      );
+      if (failures.length > 0) {
+        const wokeCount = wakeable.length - failures.length;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title:
+              wokeCount > 0
+                ? gt(
+                    "{count, plural, one {Failed to wake {count} thread} other {Failed to wake {count} threads}}",
+                    { count: failures.length },
+                  )
+                : wakeable.length === 1
+                  ? gt("Failed to wake thread")
+                  : gt("Failed to wake threads"),
+            description: thrownErrorMessage(failures[0], m) ?? gt("An error occurred."),
+          }),
+        );
+      }
+    })();
+  });
+  const handleSnoozeProjectFolder = useStableCallback(
+    (group: SidebarProjectSnapshot, preset: Pick<SnoozePreset, "snoozedUntil">) => {
+      snoozeProjectThreads(readFolderThreads(group), preset);
+    },
+  );
+  const handleSnoozeWorkingShelfProject = useStableCallback(
+    (group: SidebarProjectSnapshot, preset: Pick<SnoozePreset, "snoozedUntil">) => {
+      snoozeProjectThreads(readFolderThreads(group, "working"), preset);
+    },
+  );
+  const handleWakeSnoozedShelfProject = useStableCallback((group: SidebarProjectSnapshot) => {
+    wakeProjectThreads(readFolderThreads(group, "snoozed"));
+  });
+  const handleProjectFolderContextMenu = useStableCallback(
+    (
+      group: SidebarProjectSnapshot,
+      position: { x: number; y: number },
+      source: ContextMenuSource,
+      shelf?: SidebarShelfKey,
+    ) => {
+      const api = readLocalApi();
+      if (!api) return;
+      const now = new Date();
+      const threads = readFolderThreads(group, shelf);
+      let snoozeEnvId = group.environmentId;
+      let snoozePresets: ReturnType<typeof resolveSnoozePresets> = [];
+      const snoozeWakeItems = (() => {
+        if (!shelf || shelf === "working") {
+          const partition = partitionSnoozeableFolderThreads(threads, {
+            now: now.toISOString(),
+            supportsSnooze: (environmentId) => serverConfigsRef.current.has(environmentId),
+            canOperate: (environmentId) =>
+              readEnvironmentScope(environmentId, AuthOrchestrationOperateScope),
+          });
+          if (partition.supportedCount === 0) return [];
+          snoozeEnvId = partition.snoozeable[0]?.environmentId ?? group.environmentId;
+          snoozePresets = resolveSnoozePresets(now, timestampFormat, snoozeEnvId);
+          return [
+            {
+              id: "snooze-project" as const,
+              label:
+                partition.snoozeable.length > 0
+                  ? gt("Snooze project ({count})", { count: partition.snoozeable.length })
+                  : gt("Snooze project"),
+              icon: "clock",
+              disabled: partition.snoozeable.length === 0,
+              children: [
+                ...snoozePresets.map((preset) => ({
+                  id: `snooze-project:${preset.id}`,
+                  label: preset.label,
+                  detail: preset.whenLabel,
+                })),
+                {
+                  id: "snooze-project:custom",
+                  label: gt("Custom…"),
+                  separatorBefore: snoozePresets.length > 0,
+                },
+              ],
+            },
+          ];
+        }
+        if (shelf === "snoozed") {
+          const supported = threads.filter((thread) =>
+            serverConfigsRef.current.has(thread.environmentId),
+          );
+          if (supported.length === 0) return [];
+          const wakeableCount = supported.filter((thread) =>
+            readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope),
+          ).length;
+          return [
+            {
+              id: "wake-project" as const,
+              label:
+                wakeableCount > 0
+                  ? gt("Wake project ({count})", { count: wakeableCount })
+                  : gt("Wake project"),
+              icon: "clock",
+              disabled: wakeableCount === 0,
+            },
+          ];
+        }
+        return [];
+      })();
+      void (async () => {
+        const clicked = await settlePromise(() =>
+          api.contextMenu.show(
+            [
+              { id: "new-thread", label: gt("New thread") },
+              { id: "copy-path", label: gt("Copy path") },
+              ...snoozeWakeItems,
+              ...(canPinProject(group)
+                ? [
+                    group.pinned
+                      ? { id: "unpin", label: gt("Unpin project"), icon: "pin-off" }
+                      : { id: "pin", label: gt("Pin project"), icon: "pin" },
+                  ]
+                : []),
+              { id: "project-settings", label: gt("Project settings"), icon: "settings" },
+            ],
+            position,
+            source,
+          ),
+        );
+        if (clicked._tag === "Failure" || clicked.value === null) return;
+        if (clicked.value.startsWith("snooze-project:")) {
+          const presetId = clicked.value.slice("snooze-project:".length);
+          const preset =
+            presetId === "custom"
+              ? await requestCustomSnooze()
+              : pickSnoozePreset(snoozePresets, presetId, timestampFormat, snoozeEnvId);
+          if (preset) snoozeProjectThreads(readFolderThreads(group, shelf), preset);
+          return;
+        }
+        switch (clicked.value) {
+          case "wake-project":
+            wakeProjectThreads(readFolderThreads(group, shelf));
+            return;
+          case "new-thread":
+            startThreadInProjectFolder(group);
+            return;
+          case "copy-path":
+            copyPathToClipboard(group.workspaceRoot, { path: group.workspaceRoot });
+            return;
+          case "pin":
+          case "unpin":
+            setProjectGroupPinned(group, clicked.value === "pin");
+            return;
+          case "project-settings":
+            openProjectSettings(group);
+            return;
+        }
+      })();
+    },
+  );
   const handleMultiSelectContextMenu = useStableCallback(
     async (position: { x: number; y: number }, source: ContextMenuSource) => {
       const api = readLocalApi();
@@ -4443,6 +4664,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               group={folder.group}
                               collapsed={folder.collapsed}
                               totalCount={folder.totalCount}
+                              timestampFormat={timestampFormat}
+                              canWake={folder.canWake}
+                              onWake={handleWakeSnoozedShelfProject}
+                              canSnooze={folder.canSnooze}
+                              snoozeEnvironmentId={folder.snoozeEnvironmentId}
+                              onSnooze={handleSnoozeWorkingShelfProject}
                               onToggle={toggleShelfProjectFolder}
                               onContextMenu={handleProjectFolderContextMenu}
                             />,
@@ -4525,6 +4752,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   totalCount={folder.totalCount}
                                   hiddenThreads={folder.hiddenThreads}
                                   snoozeNow={snoozeNow}
+                                  timestampFormat={timestampFormat}
+                                  snoozeEnvironmentId={folder.snoozeEnvironmentId}
+                                  canSnooze={folder.canSnooze}
                                   canAcceptThreadDrop={canAcceptThreadDrop}
                                   onOrganize={
                                     canOrganizeFolder
@@ -4533,6 +4763,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   }
                                   onToggle={handleToggleProjectFolder}
                                   onNewThread={startThreadInProjectFolder}
+                                  onSnooze={handleSnoozeProjectFolder}
                                   onContextMenu={handleProjectFolderContextMenu}
                                 />,
                               );

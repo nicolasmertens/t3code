@@ -1,6 +1,7 @@
-import type { ScopedProjectRef, SidebarQueuePreferences } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedProjectRef, SidebarQueuePreferences } from "@t3tools/contracts";
 
 import type { EnvironmentThreadShell } from "./models.ts";
+import { canSnooze } from "./threadSettled.ts";
 
 export type SidebarTriageFilter = "all" | "attention" | "done" | "no-project";
 export type SidebarStatusBucketKey = "attention" | "active" | "done";
@@ -332,4 +333,38 @@ export function resolveRemoteSidebarQueuePreferencesUpdate(
     return null;
   }
   return { preferences: latest, updatedAt: latest.updatedAt };
+}
+
+/**
+ * Partitions a folder's threads into snoozeable targets vs threads waiting on
+ * approvals/turn-start, respecting environment snooze capability and permissions.
+ */
+export function partitionSnoozeableFolderThreads<
+  TThread extends Parameters<typeof canSnooze>[0] & { readonly environmentId: EnvironmentId },
+>(
+  threads: readonly TThread[],
+  options: {
+    readonly now: string;
+    readonly supportsSnooze: (environmentId: EnvironmentId) => boolean;
+    readonly canOperate: (environmentId: EnvironmentId) => boolean;
+  },
+): {
+  readonly snoozeable: TThread[];
+  readonly blockedCount: number;
+  readonly supportedCount: number;
+} {
+  const snoozeable: TThread[] = [];
+  let blockedCount = 0;
+  let supportedCount = 0;
+  for (const thread of threads) {
+    if (!options.supportsSnooze(thread.environmentId)) continue;
+    supportedCount += 1;
+    if (!options.canOperate(thread.environmentId)) continue;
+    if (canSnooze(thread, { now: options.now })) {
+      snoozeable.push(thread);
+    } else {
+      blockedCount += 1;
+    }
+  }
+  return { snoozeable, blockedCount, supportedCount };
 }

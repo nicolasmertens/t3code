@@ -2277,3 +2277,134 @@ describe("mobile queue grouping and triage", () => {
     expect(threadListV2ListItemsAreEqual(folderA, folderB)).toBe(false);
   });
 });
+
+describe("project folder threads and equality", () => {
+  function makeFolderScope(id: string, title: string) {
+    const projectId = ProjectId.make(id);
+    const representative: EnvironmentProject = {
+      id: projectId,
+      environmentId,
+      title,
+      workspaceRoot: `/workspaces/${id}`,
+      repositoryIdentity: null,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    };
+    return {
+      key: `${environmentId}:${id}`,
+      title,
+      representative,
+      projectRefs: [{ environmentId, projectId }],
+      isScratch: false,
+      pinned: false,
+      archived: false,
+    };
+  }
+
+  it("exposes full threads on collapsed active and shelf project folders and compares threads on equality", () => {
+    const muboScope = makeFolderScope("mubo", "Mubo");
+    const muboActive1 = makeThread({
+      id: ThreadId.make("mubo-active-1"),
+      projectId: muboScope.representative.id,
+      title: "Mubo Active 1",
+    });
+    const muboActive2 = makeThread({
+      id: ThreadId.make("mubo-active-2"),
+      projectId: muboScope.representative.id,
+      title: "Mubo Active 2",
+    });
+    const muboSnoozed1 = makeThread({
+      id: ThreadId.make("mubo-snoozed-1"),
+      projectId: muboScope.representative.id,
+      title: "Mubo Snoozed 1",
+      snoozedAt: NOW,
+      snoozedUntil: "2026-06-03T09:00:00.000Z",
+    });
+    const muboSnoozed2 = makeThread({
+      id: ThreadId.make("mubo-snoozed-2"),
+      projectId: muboScope.representative.id,
+      title: "Mubo Snoozed 2",
+      snoozedAt: NOW,
+      snoozedUntil: "2026-06-03T09:00:00.000Z",
+    });
+    const collapsedShelfKeys = new Set([`snoozed:${muboScope.key}`]);
+
+    const buildCollapsedItems = (threads: ReturnType<typeof makeThread>[]) => {
+      const layout = buildThreadListV2Items({
+        threads,
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+        snoozedShelfExpanded: true,
+      });
+      return buildThreadListV2ListItems({
+        items: layout.items,
+        pendingTasks: [],
+        workingCount: layout.workingCount,
+        workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
+        snoozedCount: layout.snoozedCount,
+        snoozedShelfHeaderIndex: layout.snoozedShelfHeaderIndex,
+        settledCount: layout.settledCount,
+        settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+        groupMode: "project",
+        projectScopes: [muboScope],
+        collapsedProjectGroups: new Set([muboScope.key]),
+        collapsedShelfProjectGroups: collapsedShelfKeys,
+        snoozedShelfExpanded: true,
+        snoozeLabelNow: NOW,
+      });
+    };
+
+    const first = buildCollapsedItems([muboActive1, muboActive2, muboSnoozed1, muboSnoozed2]);
+    const second = buildCollapsedItems([muboActive1, muboActive2, muboSnoozed1, muboSnoozed2]);
+
+    const firstFolder = first.find((item) => item.type === "v2-project-folder");
+    const secondFolder = second.find((item) => item.type === "v2-project-folder");
+    expect(firstFolder?.type).toBe("v2-project-folder");
+    if (firstFolder?.type !== "v2-project-folder" || secondFolder?.type !== "v2-project-folder") {
+      throw new Error("missing v2-project-folder");
+    }
+    expect(firstFolder.collapsed).toBe(true);
+    expect(firstFolder.threads.map((thread) => thread.id)).toEqual([
+      muboActive1.id,
+      muboActive2.id,
+    ]);
+    expect(first.filter((item) => item.type === "v2-thread")).toEqual([]);
+    expect(threadListV2ListItemsAreEqual(firstFolder, secondFolder)).toBe(true);
+
+    const firstShelfFolder = first.find((item) => item.type === "v2-shelf-project-folder");
+    const secondShelfFolder = second.find((item) => item.type === "v2-shelf-project-folder");
+    expect(firstShelfFolder?.type).toBe("v2-shelf-project-folder");
+    if (
+      firstShelfFolder?.type !== "v2-shelf-project-folder" ||
+      secondShelfFolder?.type !== "v2-shelf-project-folder"
+    ) {
+      throw new Error("missing v2-shelf-project-folder");
+    }
+    expect(firstShelfFolder.collapsed).toBe(true);
+    expect(firstShelfFolder.threads.map((thread) => thread.id)).toEqual([
+      muboSnoozed1.id,
+      muboSnoozed2.id,
+    ]);
+    expect(threadListV2ListItemsAreEqual(firstShelfFolder, secondShelfFolder)).toBe(true);
+
+    const changed = buildCollapsedItems([
+      { ...muboActive1, hasPendingApprovals: true },
+      muboActive2,
+      { ...muboSnoozed1, title: "Updated Snoozed" },
+      muboSnoozed2,
+    ]);
+    const changedFolder = changed.find((item) => item.type === "v2-project-folder");
+    const changedShelfFolder = changed.find((item) => item.type === "v2-shelf-project-folder");
+    if (
+      changedFolder?.type !== "v2-project-folder" ||
+      changedShelfFolder?.type !== "v2-shelf-project-folder"
+    ) {
+      throw new Error("missing changed folder items");
+    }
+    expect(threadListV2ListItemsAreEqual(firstFolder, changedFolder)).toBe(false);
+    expect(threadListV2ListItemsAreEqual(firstShelfFolder, changedShelfFolder)).toBe(false);
+  });
+});

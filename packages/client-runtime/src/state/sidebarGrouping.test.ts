@@ -11,6 +11,7 @@ import {
   groupThreadsByStatusWith,
   isScratchThread,
   isSidebarGroupDoneOnlyWith,
+  partitionSnoozeableFolderThreads,
   resolveRemoteSidebarQueuePreferencesUpdate,
   sidebarShelfFolderRowId,
   sidebarShelfFolderStateKey,
@@ -218,5 +219,71 @@ describe("sidebarGrouping", () => {
       resolveRemoteSidebarQueuePreferencesUpdate([older, newer], "2026-11-26T12:00:00.000Z"),
     ).toBeNull();
     expect(resolveRemoteSidebarQueuePreferencesUpdate([{ groupMode: "project" }], null)).toBeNull();
+  });
+
+  it("partitions snoozeable folder threads across capabilities, permissions, and blockers", () => {
+    const now = "2026-11-27T12:00:00.000Z";
+    const remoteEnv = EnvironmentId.make("remote");
+    const unsupportedEnv = EnvironmentId.make("legacy");
+    const baseSnoozeThread = {
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      pendingSubagentRequest: null,
+      pendingGuestMessageCount: 0,
+      latestUserMessageAt: null,
+      latestTurn: null,
+      latestRun: null,
+      session: null,
+      runtime: null,
+      source: { pendingRuntimeRequest: null },
+    };
+
+    const idle = { id: "idle", environmentId: ENV, ...baseSnoozeThread };
+    const question = {
+      id: "question",
+      environmentId: ENV,
+      ...baseSnoozeThread,
+      hasPendingUserInput: true,
+    };
+    const failed = {
+      id: "failed",
+      environmentId: ENV,
+      ...baseSnoozeThread,
+      runtime: {
+        status: "failed" as const,
+        updatedAt: "2026-11-27T11:00:00.000Z",
+        activeRunId: null,
+        providerInstanceId: null,
+        providerName: null,
+        lastError: null,
+      },
+    };
+    const approval = {
+      id: "approval",
+      environmentId: ENV,
+      ...baseSnoozeThread,
+      hasPendingApprovals: true,
+    };
+    const queued = {
+      id: "queued",
+      environmentId: ENV,
+      ...baseSnoozeThread,
+      latestUserMessageAt: "2026-11-27T11:59:30.000Z",
+    };
+    const readOnlyRemote = { id: "ro", environmentId: remoteEnv, ...baseSnoozeThread };
+    const legacy = { id: "legacy", environmentId: unsupportedEnv, ...baseSnoozeThread };
+
+    const result = partitionSnoozeableFolderThreads(
+      [idle, question, failed, approval, queued, readOnlyRemote, legacy],
+      {
+        now,
+        supportsSnooze: (envId) => envId !== unsupportedEnv,
+        canOperate: (envId) => envId !== remoteEnv,
+      },
+    );
+
+    expect(result.snoozeable.map((thread) => thread.id)).toEqual(["idle", "question", "failed"]);
+    expect(result.blockedCount).toBe(2);
+    expect(result.supportedCount).toBe(6);
   });
 });

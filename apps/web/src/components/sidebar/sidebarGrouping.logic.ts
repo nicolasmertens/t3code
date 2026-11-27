@@ -11,6 +11,7 @@ import {
   groupThreadsByStatusWith,
   isScratchThread,
   isSidebarGroupDoneOnlyWith,
+  partitionSnoozeableFolderThreads,
   sidebarShelfFolderRowId,
   sidebarShelfFolderStateKey,
   sortProjectFoldersByUrgencyWith,
@@ -43,6 +44,7 @@ export type {
 export {
   buildScratchProjectKeySet,
   isScratchThread,
+  partitionSnoozeableFolderThreads,
   sidebarShelfFolderRowId,
   sidebarShelfFolderStateKey,
 };

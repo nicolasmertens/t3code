@@ -164,6 +164,15 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     renameThread,
     regenerateThreadTitle,
   } = useThreadListActions();
+  const handleSnoozeProjectThreads = (
+    folderThreads: readonly EnvironmentThreadShell[],
+    snoozedUntil: string,
+  ) => {
+    void Promise.all(folderThreads.map((thread) => snoozeThread(thread, snoozedUntil)));
+  };
+  const handleWakeProjectThreads = (folderThreads: readonly EnvironmentThreadShell[]) => {
+    void Promise.all(folderThreads.map((thread) => unsnoozeThread(thread)));
+  };
   const pendingTasks = usePendingNewTasks();
   const launchingThreads = useLaunchingThreads(threads);
   const activeNewTask = useActiveNewTask();
@@ -489,9 +498,13 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           <ThreadListV2ProjectFolderHeader
             item={item}
             pane="sidebar"
+            now={now}
+            snoozeEnvironmentIds={snoozeEnvironmentIds}
+            snoozePresetsByEnvironmentId={snoozePresetsByEnvironmentId}
             onToggle={toggleProjectFolder}
             onOrganize={() => setOrganizeSheetOpen(true)}
             onNewThreadInProject={props.onNewThreadInProject}
+            onSnoozeThreads={handleSnoozeProjectThreads}
           />
         );
       case "v2-status-group":
@@ -503,7 +516,12 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           <ThreadListV2ShelfProjectHeader
             item={item}
             pane="sidebar"
+            now={now}
+            snoozeEnvironmentIds={snoozeEnvironmentIds}
+            snoozePresetsByEnvironmentId={snoozePresetsByEnvironmentId}
             onToggle={grouping.toggleShelfProjectFolder}
+            onSnoozeThreads={handleSnoozeProjectThreads}
+            onWakeThreads={handleWakeProjectThreads}
           />
         );
       case "v2-triage-empty":

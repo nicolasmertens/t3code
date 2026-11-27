@@ -177,3 +177,45 @@ describe("SnoozePopover", () => {
       .toHaveAttribute("aria-selected", "true");
   });
 });
+
+describe("SnoozePopover folder-header variant", () => {
+  it("opens on Interval by default with project aria label and commits Tomorrow", async () => {
+    using _timers = fakeTimers({ now: FIXED_NOW });
+    vi.mocked(readThreadShells).mockReturnValue([]);
+    const onSnooze = vi.fn();
+
+    function FolderHarness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <TooltipProvider>
+          <SnoozePopover
+            open={open}
+            onOpenChange={setOpen}
+            onSnooze={onSnooze}
+            timestampFormat="12-hour"
+            environmentId={EnvironmentId.make("env-1")}
+            defaultTab="interval"
+            triggerVariant="folder-header"
+            testId="sidebar-project-folder-snooze"
+            ariaLabel="Snooze Mubo"
+            tooltipLabel="Snooze Mubo"
+          />
+        </TooltipProvider>
+      );
+    }
+
+    await using screen = await render(<FolderHarness />);
+    await userEvent.click(screen.getByTestId("sidebar-project-folder-snooze"));
+
+    await expect
+      .element(page.getByRole("tab", { name: "Interval" }))
+      .toHaveAttribute("aria-selected", "true");
+    await userEvent.click(page.getByRole("button", { name: /Tomorrow/ }));
+
+    expect(onSnooze).toHaveBeenCalledTimes(1);
+    const committed = new Date(onSnooze.mock.calls[0]![0]!.snoozedUntil);
+    expect(committed.getHours()).toBe(9);
+    expect(committed.getMinutes()).toBe(0);
+    expect(committed.getTime()).toBeGreaterThan(FIXED_NOW.getTime());
+  });
+});

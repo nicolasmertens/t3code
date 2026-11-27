@@ -69,9 +69,16 @@ export interface SnoozePopoverProps {
   readonly onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil">) => void;
   readonly timestampFormat: TimestampFormat;
   readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
-  readonly hasLinkedPullRequest: boolean;
-  readonly linkedPullRequestLabel: string | null;
+  readonly threadId?: ThreadId | undefined;
+  readonly hasLinkedPullRequest?: boolean | undefined;
+  readonly linkedPullRequestLabel?: string | null | undefined;
+  readonly defaultTab?: SnoozePickerTab | undefined;
+  readonly excludeProjectKeys?: ReadonlySet<string> | undefined;
+  readonly ariaLabel?: string | undefined;
+  readonly tooltipLabel?: string | undefined;
+  readonly actionForRowId?: string | undefined;
+  readonly triggerVariant?: "row" | "folder-header" | undefined;
+  readonly testId?: string | undefined;
   readonly onOpenSnoozeSettings?: () => void;
 }
 
@@ -103,12 +110,14 @@ function formatShortHourPill(
 
 function readThreadCandidates(
   environmentId: EnvironmentId,
-  excludeThreadId: ThreadId,
+  excludeThreadId: ThreadId | undefined,
+  excludeProjectKeys: ReadonlySet<string> | undefined,
 ): ReadonlyArray<ThreadCandidate> {
   const candidates = readThreadShells().filter(
     (shell) =>
       shell.environmentId === environmentId &&
       shell.id !== excludeThreadId &&
+      !excludeProjectKeys?.has(`${shell.environmentId}:${shell.projectId}`) &&
       shell.archivedAt == null &&
       shell.deletedAt == null &&
       shell.settledOverride !== "settled",
@@ -133,9 +142,20 @@ function parseDateKey(dateKey: string): Date | null {
 }
 
 export function SnoozePopover(props: SnoozePopoverProps) {
-  const { open, onOpenChange, ...contentProps } = props;
+  const {
+    open,
+    onOpenChange,
+    ariaLabel,
+    tooltipLabel,
+    actionForRowId,
+    triggerVariant = "row",
+    testId,
+    ...contentProps
+  } = props;
   const gt = useGT();
   const [openSequence, setOpenSequence] = useState(0);
+  const resolvedAriaLabel = ariaLabel ?? gt("Snooze thread");
+  const resolvedTooltipLabel = tooltipLabel ?? gt("Snooze thread");
 
   return (
     <Popover
@@ -150,22 +170,37 @@ export function SnoozePopover(props: SnoozePopoverProps) {
           render={
             <PopoverTrigger
               render={
-                <button
-                  type="button"
-                  aria-label={gt("Snooze thread")}
-                  onClick={(event) => event.stopPropagation()}
-                  onDoubleClick={(event) => event.stopPropagation()}
-                  className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                />
+                triggerVariant === "folder-header" ? (
+                  <Button
+                    data-sidebar-action-for={actionForRowId}
+                    data-testid={testId}
+                    size="icon-xs"
+                    variant="ghost-muted"
+                    aria-label={resolvedAriaLabel}
+                    onClick={(event) => event.stopPropagation()}
+                    onDoubleClick={(event) => event.stopPropagation()}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    data-testid={testId}
+                    aria-label={resolvedAriaLabel}
+                    onClick={(event) => event.stopPropagation()}
+                    onDoubleClick={(event) => event.stopPropagation()}
+                    className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                  />
+                )
               }
             />
           }
         >
-          <ClockIcon className="size-3" />
+          {triggerVariant === "folder-header" ? (
+            <ClockIcon aria-hidden />
+          ) : (
+            <ClockIcon className="size-3" />
+          )}
         </TooltipTrigger>
-        <TooltipPopup>
-          <T>Snooze thread</T>
-        </TooltipPopup>
+        <TooltipPopup>{resolvedTooltipLabel}</TooltipPopup>
       </Tooltip>
       <PopoverPopup side="bottom" align="end" padding="none">
         <SnoozePopoverContent
@@ -178,7 +213,16 @@ export function SnoozePopover(props: SnoozePopoverProps) {
   );
 }
 
-interface SnoozePopoverContentProps extends Omit<SnoozePopoverProps, "open" | "onOpenChange"> {
+interface SnoozePopoverContentProps extends Omit<
+  SnoozePopoverProps,
+  | "open"
+  | "onOpenChange"
+  | "ariaLabel"
+  | "tooltipLabel"
+  | "actionForRowId"
+  | "triggerVariant"
+  | "testId"
+> {
   readonly onClose: () => void;
 }
 
@@ -189,8 +233,10 @@ function SnoozePopoverContent(props: SnoozePopoverContentProps) {
     timestampFormat,
     environmentId,
     threadId,
-    hasLinkedPullRequest,
-    linkedPullRequestLabel,
+    hasLinkedPullRequest = false,
+    linkedPullRequestLabel = null,
+    defaultTab = "hours",
+    excludeProjectKeys,
     onOpenSnoozeSettings,
   } = props;
   const gt = useGT();
@@ -199,7 +245,7 @@ function SnoozePopoverContent(props: SnoozePopoverContentProps) {
   const navigate = useNavigate();
 
   const [openedAt, setOpenedAt] = useState<Date>(() => new Date());
-  const [activeTab, setActiveTab] = useState<SnoozePickerTab>("hours");
+  const [activeTab, setActiveTab] = useState<SnoozePickerTab>(defaultTab);
   const [primingTab, setPrimingTab] = useState<SnoozePickerTab | null>(null);
   const [hoverSummary, setHoverSummary] = useState<string | null>(null);
 
@@ -225,7 +271,7 @@ function SnoozePopoverContent(props: SnoozePopoverContentProps) {
 
   const [triggerSub, setTriggerSub] = useState<TriggerSubId | null>(null);
   const [threadCandidates] = useState<ReadonlyArray<ThreadCandidate>>(() =>
-    readThreadCandidates(environmentId, threadId),
+    readThreadCandidates(environmentId, threadId, excludeProjectKeys),
   );
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(
     () => threadCandidates[0]?.id ?? null,
