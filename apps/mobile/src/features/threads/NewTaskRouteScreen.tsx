@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { isDraftThreadRoute } from "./thread-route-state";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { msg, T, useGT, useMessages } from "gt-react-native";
@@ -40,6 +41,12 @@ import type { MessageResolver } from "../../i18n/messages";
 import { useWorkspaceState } from "../../state/workspace";
 
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
+import { IntegrationActionList } from "../integrations/IntegrationActionList";
+import {
+  filterIntegrationsByQuery,
+  visibleIntegrationsForSurface,
+} from "../integrations/integrationRegistry";
+import { discussEmailsLaunchingAtom } from "../mail/discussEmails";
 import { useNewTaskFlow } from "./new-task-flow-provider";
 import {
   filterProjectScopes,
@@ -185,6 +192,14 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
   const routeDraftId = Array.isArray(route.params?.draftId)
     ? route.params.draftId[0]
     : route.params?.draftId;
+  const isLaunchingDiscussEmails = useAtomValue(discussEmailsLaunchingAtom);
+  const visibleIntegrations =
+    incomingShare !== null || routeDraftId !== undefined
+      ? []
+      : filterIntegrationsByQuery(
+          visibleIntegrationsForSurface("newTask", Platform.OS),
+          searchText,
+        );
   const incomingShareSubtitle = incomingShare
     ? incomingShare.attachments.length === 0
       ? gt("Choose a project for what you shared")
@@ -390,7 +405,21 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               : {}),
           }}
         >
-          {scratchOption !== null && listScopes.length > 0 ? (
+          {isLaunchingDiscussEmails ? (
+            <View
+              collapsable={false}
+              className={cn(
+                "items-center gap-3 px-6 py-10",
+                Platform.OS !== "android" && "rounded-[24px] bg-grouped-card",
+              )}
+            >
+              <AppActivityIndicator colorClassName="accent-icon-muted" />
+              <Text className="text-center text-base font-t3-medium text-foreground-muted">
+                {gt("Fetching your urgent emails…")}
+              </Text>
+            </View>
+          ) : null}
+          {!isLaunchingDiscussEmails && scratchOption !== null && listScopes.length > 0 ? (
             Platform.OS === "android" ? (
               <View collapsable={false} className="overflow-hidden rounded-[28px] bg-grouped-card">
                 <NavigationRow
@@ -447,7 +476,13 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               </View>
             )
           ) : null}
-          {listScopes.length === 0 ? (
+          {!isLaunchingDiscussEmails && visibleIntegrations.length > 0 ? (
+            <IntegrationActionList
+              integrations={visibleIntegrations}
+              environmentId={selectedEnvironmentId ?? scratchOption?.environmentId ?? null}
+            />
+          ) : null}
+          {isLaunchingDiscussEmails ? null : listScopes.length === 0 ? (
             <View
               collapsable={false}
               className={cn(
@@ -520,7 +555,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                 </>
               )}
             </View>
-          ) : visibleScopes.length === 0 ? (
+          ) : visibleScopes.length === 0 && visibleIntegrations.length === 0 ? (
             <View className="items-center gap-2 px-6 py-8">
               <Text className="text-center text-lg font-t3-bold text-foreground">
                 <T>No matching projects</T>

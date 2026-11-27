@@ -82,6 +82,7 @@ import {
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
+import { PrepareDiscussEmailsInput, PrepareDiscussEmailsResult } from "./discussEmails.ts";
 import {
   FleetPanelActionInput,
   FleetPanelActionResult,
@@ -1120,6 +1121,14 @@ class EnvironmentFleetPanelHttpApi extends HttpApiGroup.make("fleetPanel")
       headers: OptionalBearerHeaders,
       payload: FleetPanelActionInput,
       success: FleetPanelActionResult,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("prepareDiscussEmails", "/api/fleet-panel/discuss-emails", {
+      headers: OptionalBearerHeaders,
+      payload: PrepareDiscussEmailsInput,
+      success: PrepareDiscussEmailsResult,
       error: EnvironmentScopedOperationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}

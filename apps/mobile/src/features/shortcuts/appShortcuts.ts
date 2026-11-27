@@ -16,6 +16,13 @@ import {
 import { m } from "../../i18n/messages";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { RecentThreadShortcut } from "../../persistence/imperative";
+import {
+  DISCUSS_EMAILS_HREF,
+  DISCUSS_EMAILS_INTEGRATION_ID,
+  TALK_TO_FLEET_HREF,
+  TALK_TO_FLEET_INTEGRATION_ID,
+  visibleIntegrationsForSurface,
+} from "../integrations/integrationRegistry";
 import { resolveThreadListV2Status } from "../threads/threadListV2";
 
 const MAX_RECENT_THREAD_SHORTCUTS = 3;
@@ -25,8 +32,10 @@ const NEW_TASK_SHORTCUT_HREF = "/new";
 
 export const QUICK_SCRATCH_SHORTCUT_ID = "quick-scratch";
 export const QUICK_SCRATCH_SHORTCUT_HREF = "/new/scratch";
-export const TALK_TO_FLEET_SHORTCUT_ID = "talk-to-fleet";
-export const TALK_TO_FLEET_SHORTCUT_HREF = "/talk-to-fleet";
+export const DISCUSS_EMAILS_SHORTCUT_ID = DISCUSS_EMAILS_INTEGRATION_ID;
+export const DISCUSS_EMAILS_SHORTCUT_HREF = DISCUSS_EMAILS_HREF;
+export const TALK_TO_FLEET_SHORTCUT_ID = TALK_TO_FLEET_INTEGRATION_ID;
+export const TALK_TO_FLEET_SHORTCUT_HREF = TALK_TO_FLEET_HREF;
 export const MAX_IOS_SHORTCUTS = 4;
 
 const SHORTCUT_ICON = "shortcut_icon";
@@ -55,15 +64,14 @@ export interface FeatureShortcutDefinition {
  * Extension point for top-level feature Quick Actions (e.g. Discuss emails, Talk to Fleet).
  * Slot budgeting reserves Slot 1 for Quick task and at least 1 slot for Top attention needed.
  */
-export const IOS_FEATURE_SHORTCUTS: ReadonlyArray<FeatureShortcutDefinition> = [
-  {
-    id: TALK_TO_FLEET_SHORTCUT_ID,
-    title: () => m(msg("Talk to Fleet")),
-    subtitle: () => m(msg("Live voice")),
-    icon: "symbol:waveform",
-    href: TALK_TO_FLEET_SHORTCUT_HREF,
-  },
-];
+export const IOS_FEATURE_SHORTCUTS: ReadonlyArray<FeatureShortcutDefinition> =
+  visibleIntegrationsForSurface("iosQuickAction", "ios").map((integration) => ({
+    id: integration.id,
+    title: integration.title,
+    subtitle: integration.subtitle,
+    icon: integration.quickActionIcon,
+    href: integration.href,
+  }));
 
 function threadShortcutKey(environmentId: string, threadId: string): string {
   return `${environmentId}\0${threadId}`;

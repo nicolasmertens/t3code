@@ -74,6 +74,10 @@ import {
   takeThreadPromptLink,
 } from "./features/prompt-links/threadPromptLink";
 import {
+  resolvePendingDiscussEmailsLink,
+  takeDiscussEmailsLink,
+} from "./features/mail/discussEmailsLink";
+import {
   resolvePendingQuickScratchLink,
   takeQuickScratchLink,
 } from "./features/shortcuts/quickScratchLink";
@@ -141,6 +145,7 @@ function getAppStateFromPath(path: string, options: Parameters<typeof getStateFr
     takeThreadPromptLink,
     takeNewTaskPromptLink,
     (state) => takeQuickScratchLink(state, path),
+    (state) => takeDiscussEmailsLink(state, path),
     withoutPairingTarget,
     startDevAutoConnect,
     takeScheduledTaskNewLink,
@@ -194,6 +199,7 @@ function handleNavigationStateChange(state: NavigationState | undefined): void {
   presentPendingIncomingShare();
   resolvePendingNewTaskPromptLink(state);
   resolvePendingQuickScratchLink(state);
+  resolvePendingDiscussEmailsLink(state);
   resolvePendingThreadPromptLink(state);
   if (!state) return;
   // A launch that opens another route has no Home rows for the splash to wait for.

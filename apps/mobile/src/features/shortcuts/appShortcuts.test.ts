@@ -9,11 +9,15 @@ import {
   areShortcutActionsEqual,
   buildIosShortcutActions,
   buildShortcutActions,
+  DISCUSS_EMAILS_SHORTCUT_HREF,
+  DISCUSS_EMAILS_SHORTCUT_ID,
   MAX_IOS_SHORTCUTS,
   QUICK_SCRATCH_SHORTCUT_HREF,
   QUICK_SCRATCH_SHORTCUT_ID,
   selectIosShortcutThreads,
   shortcutHref,
+  TALK_TO_FLEET_SHORTCUT_HREF,
+  TALK_TO_FLEET_SHORTCUT_ID,
   withRecentThreadShortcut,
 } from "./appShortcuts";
 
@@ -53,6 +57,12 @@ describe("shortcutHref", () => {
     expect(shortcutHref({ id: "x", title: "x", params: { href: "/new" } })).toBe("/new");
     expect(shortcutHref({ id: "x", title: "x", params: { href: "/new/scratch" } })).toBe(
       "/new/scratch",
+    );
+    expect(shortcutHref({ id: "x", title: "x", params: { href: "/new/discuss-emails" } })).toBe(
+      "/new/discuss-emails",
+    );
+    expect(shortcutHref({ id: "x", title: "x", params: { href: "/talk-to-fleet" } })).toBe(
+      "/talk-to-fleet",
     );
     expect(shortcutHref({ id: "x", title: "x", params: { href: "/threads/env-1/thread-2" } })).toBe(
       "/threads/env-1/thread-2",
@@ -457,7 +467,7 @@ describe("buildIosShortcutActions", () => {
     expect(actions[3]?.subtitle).toBe("Failed · Browne");
   });
 
-  it("includes Talk to Fleet in the default iOS feature shortcuts and allowlists /talk-to-fleet", () => {
+  it("includes Discuss emails and Talk to Fleet in the default iOS feature shortcuts alongside Quick task and Top attention", () => {
     const actions = buildIosShortcutActions({
       threads: [
         {
@@ -471,13 +481,20 @@ describe("buildIosShortcutActions", () => {
     });
     expect(actions.map((item) => item.id)).toEqual([
       QUICK_SCRATCH_SHORTCUT_ID,
-      "talk-to-fleet",
+      DISCUSS_EMAILS_SHORTCUT_ID,
+      TALK_TO_FLEET_SHORTCUT_ID,
       "thread:/threads/env-1/t-1",
     ]);
     expect(actions[1]).toMatchObject({
-      id: "talk-to-fleet",
+      id: DISCUSS_EMAILS_SHORTCUT_ID,
+      title: "Discuss emails",
+      icon: "symbol:envelope.badge.fill",
+      params: { href: DISCUSS_EMAILS_SHORTCUT_HREF },
+    });
+    expect(actions[2]).toMatchObject({
+      id: TALK_TO_FLEET_SHORTCUT_ID,
       icon: "symbol:waveform",
-      params: { href: "/talk-to-fleet" },
+      params: { href: TALK_TO_FLEET_SHORTCUT_HREF },
     });
   });
 });

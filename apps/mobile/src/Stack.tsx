@@ -663,7 +663,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     }),
     NewTaskProject: createNativeStackScreen({
       screen: NewTaskRouteScreen,
-      linking: { path: "new", alias: ["new/project", "new/scratch"] },
+      linking: { path: "new", alias: ["new/project", "new/scratch", "new/discuss-emails"] },
       options: pageRoute(),
     }),
     NewTaskEnvironment: createNativeStackScreen({

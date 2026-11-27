@@ -117,6 +117,7 @@ import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ThreadListFilters, ThreadListTriageBar } from "./ThreadListFilters";
 import { deriveHomeEmptyState } from "./home-empty-state";
+import { IntegrationLaunchPills } from "../integrations/IntegrationLaunchPills";
 
 interface HomeScreenProps {
   /** Whether this list is the one on screen; see `useHomeRouteVisible`. */
@@ -815,6 +816,12 @@ export function HomeScreen(props: HomeScreenProps) {
           onEnvironmentChange={props.onEnvironmentChange}
           onProjectChange={props.onProjectChange}
           grouping={groupingMenuOptions}
+        />
+      ) : null}
+      {props.catalogState.hasReadyEnvironment && !hasSearchQuery ? (
+        <IntegrationLaunchPills
+          gutter={sidebarSurface ? 8 : 0}
+          environmentId={props.selectedEnvironmentId}
         />
       ) : null}
       <ThreadListTriageBar

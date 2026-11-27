@@ -31,6 +31,7 @@ const harness = vi.hoisted(() => ({
   setProject: vi.fn(),
   openScratch: vi.fn(),
   selectDetail: vi.fn(),
+  launchDiscussEmails: vi.fn(),
   navigation: {
     goBack: vi.fn(),
     getState: () => ({
@@ -67,6 +68,9 @@ vi.mock("gt-react-native", () => ({
   T: ({ children }: { children?: ReactNode }) => <>{children}</>,
   useGT: () => (text: string) => text,
   useMessages: () => (text: string) => text,
+}));
+vi.mock("../../i18n/messages", () => ({
+  m: (text: string) => text,
 }));
 vi.mock("@react-navigation/native", () => ({
   StackActions: { push: (name: string) => ({ type: "PUSH", name }) },
@@ -115,6 +119,13 @@ vi.mock("../../state/workspace", () => ({
 vi.mock("../sharing/IncomingShareProvider", () => ({
   useIncomingShare: () => ({ getShare: () => null, releaseShareReservation: vi.fn() }),
 }));
+vi.mock("../mail/discussEmails", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    discussEmailsLaunchingAtom: Atom.make(false),
+    launchDiscussEmails: harness.launchDiscussEmails,
+  };
+});
 vi.mock("../layout/workspace/useSelectWorkspaceDetail", () => ({
   useSelectWorkspaceDetail: () => harness.selectDetail,
 }));
@@ -221,4 +232,19 @@ it("cancels the No project draft retarget when another project is picked", async
   await act(async () => screen.retargeting.resolve(true));
 
   expect(harness.selectDetail.mock.calls).toEqual(appDraftSelection);
+});
+
+it("renders Discuss emails integration action and launches it on press", () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  harness.launchDiscussEmails.mockClear();
+
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  using _root = { [Symbol.dispose]: () => act(() => root.unmount()) };
+  act(() => root.render(<NewTaskRouteScreen route={{ params: undefined } as never} />));
+
+  const discussButton = container.querySelector<HTMLElement>('[aria-label="Discuss emails"]');
+  expect(discussButton).not.toBeNull();
+  act(() => discussButton!.click());
+  expect(harness.launchDiscussEmails).toHaveBeenCalledWith({ environmentId });
 });

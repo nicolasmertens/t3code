@@ -50,6 +50,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProcessLauncher from "./process/ProcessLauncher.ts";
 import * as SpawnWorker from "./process/SpawnWorker.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
+import * as DiscussEmailsService from "./fleet/DiscussEmailsService.ts";
 import * as FleetPanelHttp from "./fleet/FleetPanelHttp.ts";
 import * as FleetPanelService from "./fleet/FleetPanelService.ts";
 import * as PullRequestHttp from "./pullRequest/http.ts";
@@ -908,7 +909,12 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(
         FleetPanelHttp.layer.pipe(
           Layer.provide(
-            FleetPanelService.FleetPanelService.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+            Layer.mergeAll(
+              FleetPanelService.FleetPanelService.layer.pipe(
+                Layer.provide(ProjectionStoreV2.layer),
+              ),
+              DiscussEmailsService.DiscussEmailsService.layer,
+            ),
           ),
         ),
       ),

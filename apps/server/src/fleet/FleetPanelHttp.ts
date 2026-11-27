@@ -12,6 +12,7 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import { traceLocalHandlerWork } from "../cloud/traceRelayRequest.ts";
+import * as DiscussEmailsService from "./DiscussEmailsService.ts";
 import * as FleetPanelService from "./FleetPanelService.ts";
 
 export const layer = HttpApiBuilder.group(
@@ -19,6 +20,7 @@ export const layer = HttpApiBuilder.group(
   "fleetPanel",
   Effect.fnUntraced(function* (handlers) {
     const service = yield* FleetPanelService.FleetPanelService;
+    const discussEmails = yield* DiscussEmailsService.DiscussEmailsService;
 
     return handlers
       .handle(
@@ -41,6 +43,16 @@ export const layer = HttpApiBuilder.group(
             traceLocalHandlerWork,
             Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
           );
+        }),
+      )
+      .handle(
+        "prepareDiscussEmails",
+        Effect.fn("environment.fleetPanel.prepareDiscussEmails")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* discussEmails
+            .prepareDiscussEmails(args.payload)
+            .pipe(traceLocalHandlerWork);
         }),
       );
   }),

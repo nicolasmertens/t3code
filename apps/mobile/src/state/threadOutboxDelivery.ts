@@ -1190,7 +1190,7 @@ export function createThreadOutboxDelivery(): {
         commandId: queuedMessage.commandId,
         messageId: queuedMessage.messageId,
         createdAt: queuedMessage.createdAt,
-        titleText: queuedMessage.text,
+        titleText: creation.title ?? queuedMessage.text,
         ...serializeComposerMessageForServer(
           queuedMessage.text.trim(),
           uploadedComposerContext(

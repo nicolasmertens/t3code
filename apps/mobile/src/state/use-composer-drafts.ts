@@ -2246,3 +2246,7 @@ export function useStickyComposerModelSelection(): ModelSelection | null {
   }, []);
   return selection;
 }
+
+export function getStickyComposerModelSelectionSnapshot(): ModelSelection | null {
+  return appAtomRegistry.get(stickyComposerModelSelectionAtom);
+}

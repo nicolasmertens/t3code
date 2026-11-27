@@ -25,6 +25,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   Text as NativeText,
   TextInput,
@@ -58,6 +59,8 @@ import { useCanShareWithGuest } from "../threads/useCanShareWithGuest";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
+import { visibleIntegrationsForSurface } from "../integrations/integrationRegistry";
+import { useLaunchIntegration } from "../integrations/useLaunchIntegration";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -277,6 +280,7 @@ export function CommandPalette(props: {
   );
   const serverConfigs = useServerConfigs();
   const startTriage = useStartTriage();
+  const { launch: launchIntegration } = useLaunchIntegration();
   const newTaskFlow = useNewTaskFlow();
   const draftEnvironmentId =
     useActiveNewTask() === null ? null : (newTaskFlow.selectedProject?.environmentId ?? null);
@@ -369,6 +373,16 @@ export function CommandPalette(props: {
             : gt("On this machine"),
         searchTerms: ["triage", "bug", "issue", "report", "broken", "debug", "help", "support"],
         run: () => void startTriage(triageEnvironmentId),
+      });
+    }
+    for (const integration of visibleIntegrationsForSurface("commandPalette", Platform.OS)) {
+      actions.push({
+        key: `integration:${integration.id}`,
+        kind: "action",
+        title: integration.title(),
+        detail: integration.subtitle(),
+        searchTerms: integration.searchTerms,
+        run: () => launchIntegration(integration),
       });
     }
     const projectByKey = new Map(
@@ -506,6 +520,7 @@ export function CommandPalette(props: {
     savedConnectionsById,
     selectDetail,
     startTriage,
+    launchIntegration,
     threads,
     delegatedUnderParent,
     triageEnvironmentId,
