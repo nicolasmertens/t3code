@@ -12,7 +12,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { T, useGT, Var } from "gt-react";
-import { ChevronDownIcon } from "lucide-react";
+import { AudioLinesIcon, ChevronDownIcon } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -23,6 +23,7 @@ import {
 } from "react";
 import { isTrailingDoubleClick } from "../Sidebar.logic";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
@@ -44,6 +45,8 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
+import { useTalkToFleetState } from "../../speech/talkToFleetClient";
+import { isTalkToFleetWebActive } from "../../speech/talkToFleetState";
 import { GuestShareIndicator } from "./GuestShareControls";
 
 interface ChatHeaderProps {
@@ -59,6 +62,7 @@ interface ChatHeaderProps {
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
   onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
+  onOpenVoiceSidechat?: (() => void) | undefined;
 }
 
 function resolveRenameCommit(input: {
@@ -84,8 +88,14 @@ export const ChatHeader = memo(function ChatHeader({
   onNewThreadInProject,
   onOpenProjectSettings,
   onFindInThread,
+  onOpenVoiceSidechat,
 }: ChatHeaderProps) {
   const gt = useGT();
+  const talkToFleetState = useTalkToFleetState();
+  const voiceActiveOnThisThread =
+    isTalkToFleetWebActive(talkToFleetState.phase) &&
+    talkToFleetState.environmentId === activeThreadEnvironmentId &&
+    talkToFleetState.scopedThreadId === activeThreadId;
   const activeProjectName = activeProject?.isScratch ? gt("No project") : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
@@ -413,6 +423,31 @@ export const ChatHeader = memo(function ChatHeader({
           ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {onOpenVoiceSidechat && isServerThread && canOperateThread ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost-muted"
+                aria-label={
+                  voiceActiveOnThisThread ? gt("Open active voice sidechat") : gt("Voice sidechat")
+                }
+                onClick={onOpenVoiceSidechat}
+                className="shrink-0 [-webkit-app-region:no-drag]"
+              />
+            }
+          >
+            <AudioLinesIcon
+              className={cn("size-3.5", voiceActiveOnThisThread && "animate-pulse text-primary")}
+            />
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            {voiceActiveOnThisThread ? gt("Open active voice sidechat") : gt("Voice sidechat")}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

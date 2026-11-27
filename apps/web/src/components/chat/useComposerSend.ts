@@ -4,6 +4,7 @@ import { m } from "~/i18n/messages";
 import {
   isClearComposerCommand,
   parseSideChatCommand,
+  parseTalkCommand,
   parseXResearchCommand,
 } from "@t3tools/shared/composerTrigger";
 import { formatXResearchSideChatPrompt } from "../../lib/xResearchSideChat";
@@ -293,6 +294,9 @@ interface ComposerSendInput {
     | undefined;
   /** Refuses `/x` with this reason and keeps the draft. */
   readonly xResearchSideChatDisabledReason?: string | null;
+  /** Opens a live voice sidechat beside this main session. */
+  readonly onTalkCommand?: (() => void) | undefined;
+  readonly voiceSidechatDisabledReason?: string | null;
   readonly handleNewThreadInActiveProject: () => void;
   readonly persistThreadSettingsForNextTurn: (input: {
     threadId: ThreadId;
@@ -385,6 +389,8 @@ export function useComposerSend(input: ComposerSendInput) {
     sideChatDisabledReason,
     onXResearchSideChat,
     xResearchSideChatDisabledReason = null,
+    onTalkCommand,
+    voiceSidechatDisabledReason = null,
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
@@ -458,6 +464,35 @@ export function useComposerSend(input: ComposerSendInput) {
           promptRef.current = "";
           composerRef.current?.resetCursorState();
         }
+      }
+      return;
+    }
+
+    const talkCommand =
+      !directAnnotation &&
+      !queuedRunEdit.isEditing &&
+      !draftHasNonPromptContent(composerDraftTarget) &&
+      countPreparingComposerImages(composerTargetKey(composerDraftTarget)) === 0
+        ? parseTalkCommand(promptAtSend)
+        : null;
+    if (talkCommand !== null) {
+      if (voiceSidechatDisabledReason !== null || !onTalkCommand) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: m(msg("Voice sidechat not started")),
+            description:
+              voiceSidechatDisabledReason ??
+              m(msg("Voice sidechat is only available on active server threads.")),
+          }),
+        );
+        return;
+      }
+      onTalkCommand();
+      setComposerDraftPrompt(composerDraftTarget, "");
+      if (currentRouteThreadKeyRef.current === routeThreadKey) {
+        promptRef.current = "";
+        composerRef.current?.resetCursorState();
       }
       return;
     }
@@ -875,7 +910,9 @@ export function useComposerSend(input: ComposerSendInput) {
       // A queued message stays in its thread, so saving `/side` or `/x` would send it to main.
       if (
         !directAnnotation &&
-        (parseSideChatCommand(promptAtSend) || parseXResearchCommand(promptAtSend))
+        (parseSideChatCommand(promptAtSend) ||
+          parseXResearchCommand(promptAtSend) ||
+          parseTalkCommand(promptAtSend))
       ) {
         toastManager.add(
           stackedThreadToast({

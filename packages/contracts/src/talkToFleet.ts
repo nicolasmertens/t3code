@@ -108,10 +108,12 @@ export const TalkToFleetClientMessage = Schema.Union([
     sessionId: Schema.optional(Schema.String),
     lastEventSeq: Schema.optional(Schema.Int),
     threadId: Schema.optional(Schema.String),
+    mode: Schema.optional(Schema.Literals(["thread", "fleet"])),
     greet: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({ type: Schema.Literal("hangup") }),
   Schema.Struct({ type: Schema.Literal("new_session") }),
+  Schema.Struct({ type: Schema.Literal("interrupt_assistant") }),
   Schema.Struct({
     type: Schema.Literal("approve"),
     threadId: Schema.String,
@@ -126,11 +128,11 @@ export const TalkToFleetClientMessage = Schema.Union([
 ]);
 export type TalkToFleetClientMessage = typeof TalkToFleetClientMessage.Type;
 
-export const TalkToFleetServerPhase = Schema.Literals(["listening", "thinking", "speaking"]);
-export type TalkToFleetServerPhase = typeof TalkToFleetServerPhase.Type;
-
 export const TalkToFleetSpeaker = Schema.Literals(["you", "fleet"]);
 export type TalkToFleetSpeaker = typeof TalkToFleetSpeaker.Type;
+
+export const TalkToFleetServerPhase = Schema.Literals(["listening", "thinking", "speaking"]);
+export type TalkToFleetServerPhase = typeof TalkToFleetServerPhase.Type;
 
 export const TalkToFleetServerEvent = Schema.Union([
   Schema.Struct({
@@ -139,6 +141,8 @@ export const TalkToFleetServerEvent = Schema.Union([
     sessionId: Schema.String,
     provider: Schema.String,
     model: Schema.String,
+    scopedThreadId: Schema.optional(Schema.NullOr(Schema.String)),
+    scopedThreadTitle: Schema.optional(Schema.NullOr(Schema.String)),
     contextBuiltAt: Schema.NullOr(Schema.String),
     degradedSources: Schema.Array(Schema.String),
   }),

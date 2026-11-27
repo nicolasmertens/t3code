@@ -15,6 +15,8 @@ export interface VoiceProviderConfig {
   readonly tools: ReadonlyArray<VoiceToolDefinition>;
   readonly voiceId?: string;
   readonly audioSpeed?: number;
+  readonly intelligenceLevel?: "standard" | "high";
+  readonly boostedKeywords?: ReadonlyArray<string>;
 }
 
 export interface VoiceProviderCallbacks {
@@ -22,6 +24,7 @@ export interface VoiceProviderCallbacks {
   readonly onAudio: (pcm24kInt16: Uint8Array) => void;
   readonly onTranscript: (speaker: "you" | "fleet", delta: string) => void;
   readonly onAssistantSpeakingChanged: (speaking: boolean) => void;
+  readonly onUserSpeakingChanged?: (speaking: boolean) => void;
   readonly onUserInterrupted: () => void;
   readonly onToolCall: (
     callId: string,

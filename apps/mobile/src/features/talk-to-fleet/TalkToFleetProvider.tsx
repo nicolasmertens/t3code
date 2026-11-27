@@ -232,6 +232,9 @@ function createTalkToFleetController(registry: AtomRegistry.AtomRegistry) {
     bridge.addListener("onEvent", ({ json }) => {
       try {
         const event = decodeServerEvent(json);
+        if (event.type === "interrupt") {
+          bridge.interruptPlayback();
+        }
         const next = reduceTalkToFleetEvent(state, event);
         setState(next);
         if (event.type === "session_ended" || (event.type === "error" && !event.recoverable)) {
@@ -419,6 +422,21 @@ function createTalkToFleetController(registry: AtomRegistry.AtomRegistry) {
     );
   };
 
+  const interruptAssistant = () => {
+    if (!isTalkToFleetActivePhase(state.phase)) {
+      return;
+    }
+    bridge.interruptPlayback();
+    if (state.sessionId) {
+      bridge.sendControl(JSON.stringify({ type: "interrupt_assistant" }));
+    }
+    setState({
+      ...state,
+      phase: "listening",
+      statusDetail: null,
+    });
+  };
+
   const dispose = () => {
     intentionalStop = true;
     clearReconnectTimer();
@@ -446,6 +464,7 @@ function createTalkToFleetController(registry: AtomRegistry.AtomRegistry) {
     toggleSpeaker,
     toggleCaptions,
     respondApproval,
+    interruptAssistant,
     dispose,
   };
 }
@@ -471,5 +490,6 @@ export function useTalkToFleet() {
     toggleSpeaker: controller.toggleSpeaker,
     toggleCaptions: controller.toggleCaptions,
     respondApproval: controller.respondApproval,
+    interruptAssistant: controller.interruptAssistant,
   };
 }

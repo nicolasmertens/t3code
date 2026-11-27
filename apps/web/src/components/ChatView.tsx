@@ -52,6 +52,8 @@ import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnviron
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
+import { talkToFleetController } from "../speech/talkToFleetClient";
+import { isTalkToFleetWebActive } from "../speech/talkToFleetState";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { resolveWorktreeRepositorySelection } from "@t3tools/client-runtime/state/thread-repositories";
@@ -3051,6 +3053,27 @@ export default function ChatView(props: ChatViewProps) {
   );
   const openSurfaceInMainView = useOpenSurfaceInMainView(activeThreadRef);
   const sendSideChatStable = useStableCallback(sideChat.open);
+  const voiceSidechatAvailable = !embedded && canOperateThread && isServerThread;
+  const voiceSidechatDisabledReason = !canOperateThread
+    ? gt("Voice sidechat requires agent access in this environment.")
+    : !isServerThread
+      ? gt("Voice sidechat starts after the first message.")
+      : null;
+  const openVoiceSidechatStable = useStableCallback(() => {
+    if (!activeThreadRef || !activeThread || !isServerThread || !canOperateThread) {
+      return;
+    }
+    useRightPanelStore.getState().open(activeThreadRef, "voice");
+    const fleetState = talkToFleetController.getSnapshot();
+    if (!isTalkToFleetWebActive(fleetState.phase)) {
+      void talkToFleetController.start(activeThreadRef.environmentId, {
+        threadId: activeThreadRef.threadId,
+        threadTitle: activeThread.title,
+        mode: "thread",
+        openFloatingPanel: false,
+      });
+    }
+  });
   const { onConfirmRevertStable, onForkFromRunStable, onRevertTimelineTurnStable } =
     useTimelineRewind({
       environmentId,
@@ -3198,6 +3221,8 @@ export default function ChatView(props: ChatViewProps) {
     sideChatDisabledReason,
     onXResearchSideChat: sideChat.available ? sendXResearchSideChatStable : undefined,
     xResearchSideChatDisabledReason,
+    onTalkCommand: voiceSidechatAvailable ? openVoiceSidechatStable : undefined,
+    voiceSidechatDisabledReason,
     handleNewThreadInActiveProject,
     persistThreadSettingsForNextTurn,
     linkCheckoutPullRequest,
@@ -3444,6 +3469,7 @@ export default function ChatView(props: ChatViewProps) {
       surface={renderedRightPanelSurface}
       activeSurfaceId={activeRightPanelSurface?.id ?? null}
       threadRef={activeThreadRef}
+      threadTitle={activeThread.title}
       environmentId={activeThread.environmentId}
       visible={rightPanelOpen}
       composerDraftTarget={composerDraftTarget}
@@ -3595,6 +3621,7 @@ export default function ChatView(props: ChatViewProps) {
                 ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
                 : {})}
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
+              {...(voiceSidechatAvailable ? { onOpenVoiceSidechat: openVoiceSidechatStable } : {})}
             />
           </header>
         )}
@@ -3912,6 +3939,10 @@ export default function ChatView(props: ChatViewProps) {
                                 sideChatAvailable={sideChat.available}
                                 sideChatDisabledReason={sideChatDisabledReason}
                                 xResearchSideChatDisabledReason={xResearchSideChatDisabledReason}
+                                onTalkCommand={
+                                  voiceSidechatAvailable ? openVoiceSidechatStable : undefined
+                                }
+                                voiceSidechatDisabledReason={voiceSidechatDisabledReason}
                                 onFreshSession={
                                   freshSessionCommandAvailable ? armFreshSessionStable : undefined
                                 }
@@ -4250,6 +4281,7 @@ export default function ChatView(props: ChatViewProps) {
           }
           surfaces={renderedRightPanelSurfaces}
           environmentId={activeThreadRef.environmentId}
+          threadId={activeThreadRef.threadId}
           activeSurfaceId={renderedRightPanelSurface?.id ?? null}
           pendingSurfaceIds={pendingFileSurfaceIds}
           previewSessions={activePreviewState.sessions}
@@ -4279,6 +4311,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddDevice={addDeviceSurfaceStable}
           onAddSideChat={sideChatsOffered ? openSideChatStable : undefined}
           onAddXResearch={sideChatsOffered ? openXResearchSideChatStable : undefined}
+          onAddVoice={!embedded && canOperateThread ? openVoiceSidechatStable : undefined}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
           diffAvailable={isServerThread && diffAvailable}
@@ -4290,6 +4323,8 @@ export default function ChatView(props: ChatViewProps) {
           sideChatDisabledReason={sideChatDisabledReason}
           xResearchAvailable={sideChat.available}
           xResearchDisabledReason={xResearchSideChatDisabledReason}
+          voiceAvailable={voiceSidechatAvailable}
+          voiceDisabledReason={voiceSidechatDisabledReason}
         >
           {rightPanelContent}
         </ChatRightPanel>

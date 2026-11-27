@@ -28,6 +28,7 @@ import { PullRequestDetailPanel } from "../pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
 import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
+import { VoiceSidechatPane } from "../voice/VoiceSidechatPane";
 
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
@@ -67,6 +68,7 @@ export function RightPanelSurfaceContent(props: {
   readonly surface: RightPanelSurface | null;
   readonly activeSurfaceId: string | null;
   readonly threadRef: ScopedThreadRef;
+  readonly threadTitle: string;
   readonly environmentId: EnvironmentId;
   readonly visible: boolean;
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
@@ -250,6 +252,17 @@ export function RightPanelSurfaceContent(props: {
           panelRef={threadRef}
           surface={surface}
           visible={visible && props.activeSurfaceId === surface.id}
+        />
+      );
+    case "voice":
+      return (
+        <VoiceSidechatPane
+          key={surface.id}
+          threadRef={threadRef}
+          threadTitle={props.threadTitle}
+          visible={visible && props.activeSurfaceId === surface.id}
+          composerDraftTarget={props.composerDraftTarget}
+          onClose={() => onCloseSurface(surface)}
         />
       );
     case "device":

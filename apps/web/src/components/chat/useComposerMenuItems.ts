@@ -75,6 +75,8 @@ export function useComposerMenuItems({
   sideChatAvailable,
   sideChatDisabledReason,
   xResearchSideChatDisabledReason = null,
+  voiceSidechatAvailable = false,
+  voiceSidechatDisabledReason = null,
   freshSessionAvailable,
   compactSlashCommandAvailable,
   selectedProvider,
@@ -96,6 +98,8 @@ export function useComposerMenuItems({
   readonly sideChatAvailable: boolean;
   readonly sideChatDisabledReason: string | null;
   readonly xResearchSideChatDisabledReason?: string | null;
+  readonly voiceSidechatAvailable?: boolean;
+  readonly voiceSidechatDisabledReason?: string | null;
   readonly freshSessionAvailable: boolean;
   readonly compactSlashCommandAvailable: boolean;
   readonly selectedProvider: ProviderDriverKind;
@@ -289,6 +293,19 @@ export function useComposerMenuItems({
                   xResearchSideChatDisabledReason ??
                   sideChatDisabledReason ??
                   gt("Research on X in a Grok side chat"),
+              },
+            ] as const)
+          : []),
+        ...(voiceSidechatAvailable
+          ? ([
+              {
+                id: "slash:talk",
+                type: "slash-command",
+                command: "talk",
+                label: "/talk",
+                description:
+                  voiceSidechatDisabledReason ??
+                  gt("Open a live voice sidechat for this main session"),
               },
             ] as const)
           : []),

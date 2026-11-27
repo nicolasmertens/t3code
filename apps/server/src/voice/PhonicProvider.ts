@@ -25,12 +25,43 @@ const PHONIC_KEEPALIVE_INTERVAL_MS = 100;
 const PHONIC_SILENCE_GAP_MS = 200;
 const PHONIC_SILENCE_FRAME = new Uint8Array(3200);
 const MAX_TOOL_OUTPUT_BYTES = 15_000;
+const MAX_BOOSTED_KEYWORDS = 60;
+
+const DEFAULT_BOOSTED_KEYWORDS: ReadonlyArray<string> = [
+  "Browne",
+  "Fleet",
+  "MaxBook",
+  "Postroom",
+  "Godwit",
+  "Antigravity",
+  "Phonic",
+  "Codex",
+  "Claude",
+  "Vlaamse Stem",
+  "Mubo",
+  "DossierKit",
+  "Sidechat",
+  "Worktree",
+  "Commit",
+  "Branch",
+  "Deploy",
+  "Bredabaan",
+  "Geuzenstraat",
+  "Volkstraat",
+  "Frankrijklei",
+  "Werkblad",
+  "Offerte",
+  "Versta je me",
+  "Met jou",
+  "Nick",
+];
 
 interface PhonicAgentSummary {
   readonly name?: string;
   readonly voice_id?: string;
   readonly audio_speed?: number;
   readonly intelligence_level?: string;
+  readonly turn_taking?: string;
   readonly background_noise?: string | null;
   readonly background_noise_level?: number;
   readonly min_words_to_interrupt?: number;
@@ -38,6 +69,28 @@ interface PhonicAgentSummary {
   readonly no_input_end_conversation_sec?: number;
   readonly boosted_keywords?: ReadonlyArray<string>;
   readonly pronunciation_dictionary?: ReadonlyArray<unknown>;
+}
+
+function mergeBoostedKeywords(
+  ...lists: ReadonlyArray<ReadonlyArray<string> | undefined>
+): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const list of lists) {
+    if (!list) continue;
+    for (const raw of list) {
+      const trimmed = raw.trim();
+      if (trimmed.length < 2 || trimmed.length > 48) continue;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(trimmed);
+      if (merged.length >= MAX_BOOSTED_KEYWORDS) {
+        return merged;
+      }
+    }
+  }
+  return merged;
 }
 
 function toPhonicToolSchema(tool: VoiceToolDefinition) {
@@ -74,7 +127,7 @@ function toPhonicToolSchema(tool: VoiceToolDefinition) {
   };
 }
 
-function boundPhonicToolOutput(value: unknown): unknown {
+export function boundPhonicToolOutput(value: unknown): unknown {
   const serialized = JSON.stringify(value);
   if (serialized === undefined) return { status: "empty" };
   if (Buffer.byteLength(serialized, "utf8") <= MAX_TOOL_OUTPUT_BYTES) {
@@ -187,6 +240,19 @@ async function connectPhonicVoiceProvider(
       (Number.isFinite(envSpeed) && envSpeed > 0 ? envSpeed : undefined) ??
       agentOverrides?.audio_speed ??
       1.15;
+    const envMinWords = Number(process.env.PHONIC_MIN_WORDS_TO_INTERRUPT);
+    const minWordsToInterrupt =
+      Number.isInteger(envMinWords) && envMinWords >= 1
+        ? envMinWords
+        : Math.max(2, agentOverrides?.min_words_to_interrupt ?? 2);
+    const intelligenceLevel =
+      process.env.PHONIC_INTELLIGENCE_LEVEL?.trim() || config.intelligenceLevel || "high";
+    const enableBackchannel = process.env.PHONIC_ENABLE_BACKCHANNEL === "1";
+    const boostedKeywords = mergeBoostedKeywords(
+      DEFAULT_BOOSTED_KEYWORDS,
+      config.boostedKeywords,
+      agentOverrides?.boosted_keywords,
+    );
 
     sendJson({
       type: "config",
@@ -198,20 +264,21 @@ async function connectPhonicVoiceProvider(
       audio_speed: audioSpeed,
       input_format: `pcm_${TALK_TO_FLEET_INPUT_SAMPLE_RATE}`,
       output_format: `pcm_${TALK_TO_FLEET_OUTPUT_SAMPLE_RATE}`,
-      intelligence_level: agentOverrides?.intelligence_level ?? "standard",
+      intelligence_level: intelligenceLevel,
+      turn_taking: agentOverrides?.turn_taking ?? "standard",
       background_noise: agentOverrides?.background_noise ?? null,
       background_noise_level: agentOverrides?.background_noise_level ?? 0,
       default_language: "nl",
       additional_languages: ["en"],
       multilingual_mode: "auto",
-      min_words_to_interrupt: agentOverrides?.min_words_to_interrupt ?? 1,
+      min_words_to_interrupt: minWordsToInterrupt,
       generate_welcome_message: false,
       welcome_message: config.welcomeMessage,
       is_welcome_message_interruptible: true,
-      enable_assistant_backchannel: agentOverrides?.enable_assistant_backchannel ?? true,
+      enable_assistant_backchannel: enableBackchannel,
       no_input_poke_sec: null,
       no_input_end_conversation_sec: agentOverrides?.no_input_end_conversation_sec ?? 180,
-      boosted_keywords: agentOverrides?.boosted_keywords ?? [],
+      boosted_keywords: boostedKeywords,
       pronunciation_dictionary: agentOverrides?.pronunciation_dictionary ?? [],
       tools: [
         ...config.tools.map(toPhonicToolSchema),
@@ -249,7 +316,12 @@ async function connectPhonicVoiceProvider(
       return;
     }
     if (kind === "input_text" && typeof parsed.text === "string" && parsed.text.length > 0) {
+      callbacks.onUserSpeakingChanged?.(false);
       callbacks.onTranscript("you", parsed.text);
+      return;
+    }
+    if (kind === "user_finished_speaking" || kind === "input_cancelled") {
+      callbacks.onUserSpeakingChanged?.(false);
       return;
     }
     if (kind === "audio_chunk") {
@@ -268,6 +340,7 @@ async function connectPhonicVoiceProvider(
     }
     if (kind === "user_started_speaking") {
       assistantSpeaking = false;
+      callbacks.onUserSpeakingChanged?.(true);
       callbacks.onAssistantSpeakingChanged(false);
       callbacks.onUserInterrupted();
       return;

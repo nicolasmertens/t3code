@@ -32,12 +32,14 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { boundPhonicToolOutput } from "./PhonicProvider.ts";
 import { RealtimeVoiceProvider, type VoiceProviderConnection } from "./RealtimeVoiceProvider.ts";
 import { VoiceContextCache, buildVoiceBriefing } from "./VoiceContextCache.ts";
 import { buildVoiceSystemPrompt } from "./VoicePrompt.ts";
 import {
   VOICE_TOOL_DEFINITIONS,
   executeVoiceTool,
+  extractBoostedKeywordsFromSnapshot,
   readLiveBrowneSnapshot,
   type VoiceToolsDeps,
 } from "./VoiceTools.ts";
@@ -82,16 +84,32 @@ interface ActiveSession {
   phase: TalkToFleetServerPhase;
   providerName: string;
   modelName: string;
+  scopedThreadTitle: string | null;
   contextBuiltAt: string | null;
   degradedSources: ReadonlyArray<string>;
   activeTranscriptId: string | null;
   activeTranscriptSpeaker: "you" | "fleet" | null;
   clientSpeaking: boolean;
+  userSpeaking: boolean;
+  dropAudioUntilNextAssistantTurn: boolean;
   providerReady: boolean;
   providerConn: VoiceProviderConnection | null;
   attached: AttachedClient | null;
   orphanTimer: ReturnType<typeof setTimeout> | null;
   disposed: boolean;
+}
+
+function buildGreetingMessage(scopedTitle?: string | null): string {
+  const cleaned = scopedTitle?.replace(/\s+/gu, " ").trim();
+  if (
+    !cleaned ||
+    cleaned.toLowerCase() === "new thread" ||
+    cleaned.toLowerCase() === "untitled thread"
+  ) {
+    return "Hey Nick, ik ben er.";
+  }
+  const shortTitle = cleaned.length > 48 ? `${cleaned.slice(0, 45).trimEnd()}...` : cleaned;
+  return `Hey Nick, ik kijk mee op ${shortTitle}.`;
 }
 
 export class TalkToFleetService extends Context.Service<
@@ -171,21 +189,44 @@ export class TalkToFleetService extends Context.Service<
 
       const startProviderForSession = async (
         session: ActiveSession,
-        options: { readonly welcomeMessage: string | null },
+        options: { readonly greet: boolean },
       ) => {
         const external = await runPromise(contextCache.getSnapshot);
         const live = await runPromise(readLiveBrowneSnapshot(toolDeps, session.scopedThreadId));
+        if (session.disposed) return;
+
+        if (live.scopedThread) {
+          session.scopedThreadTitle = live.scopedThread.title;
+          session.trackedThreads.set(live.scopedThread.id, live.scopedThread.title);
+        }
+
         const briefing = buildVoiceBriefing({ external, live });
         session.contextBuiltAt = briefing.builtAt;
         session.degradedSources = briefing.degradedSources;
-        const systemPrompt = buildVoiceSystemPrompt(briefing.text);
+        const systemPrompt = buildVoiceSystemPrompt({
+          briefingText: briefing.text,
+          ...(live.scopedThread
+            ? {
+                scopedThread: {
+                  title: live.scopedThread.title,
+                  projectTitle: live.scopedThread.projectTitle,
+                },
+              }
+            : {}),
+        });
+        const welcomeMessage = options.greet
+          ? buildGreetingMessage(live.scopedThread?.title)
+          : null;
+        const boostedKeywords = extractBoostedKeywordsFromSnapshot(live);
 
         try {
           const conn = await voiceProvider.connect(
             {
               systemPrompt,
-              welcomeMessage: options.welcomeMessage,
+              welcomeMessage,
               tools: VOICE_TOOL_DEFINITIONS,
+              intelligenceLevel: "high",
+              boostedKeywords,
             },
             {
               onReady: ({ provider, model }) => {
@@ -198,13 +239,15 @@ export class TalkToFleetService extends Context.Service<
                   sessionId: session.sessionId,
                   provider,
                   model,
+                  scopedThreadId: session.scopedThreadId ?? null,
+                  scopedThreadTitle: session.scopedThreadTitle,
                   contextBuiltAt: session.contextBuiltAt,
                   degradedSources: session.degradedSources,
                 });
                 emitEvent(session, { type: "phase", phase: "listening" });
               },
               onAudio: (pcm24k) => {
-                if (session.disposed) return;
+                if (session.disposed || session.dropAudioUntilNextAssistantTurn) return;
                 const bytes = encodeTalkToFleetAudioFrame(
                   TALK_TO_FLEET_FRAME_SERVER_AUDIO,
                   session.turnId,
@@ -228,15 +271,21 @@ export class TalkToFleetService extends Context.Service<
               onAssistantSpeakingChanged: (speaking) => {
                 if (session.disposed) return;
                 if (speaking) {
+                  session.dropAudioUntilNextAssistantTurn = false;
                   session.turnId += 1;
                   emitEvent(session, { type: "phase", phase: "speaking" });
                 } else {
                   emitEvent(session, { type: "phase", phase: "listening" });
                 }
               },
+              onUserSpeakingChanged: (speaking) => {
+                if (session.disposed) return;
+                session.userSpeaking = speaking;
+              },
               onUserInterrupted: () => {
                 if (session.disposed) return;
                 session.turnId += 1;
+                session.dropAudioUntilNextAssistantTurn = false;
                 session.activeTranscriptSpeaker = "you";
                 session.activeTranscriptId = null;
                 emitEvent(session, { type: "interrupt", turnId: session.turnId });
@@ -252,6 +301,7 @@ export class TalkToFleetService extends Context.Service<
                     callId,
                     name,
                     args,
+                    scopedThreadId: session.scopedThreadId,
                     emitCard: (card) => emitEvent(session, { type: "card", card }),
                     trackThread: (threadId, title) => {
                       session.trackedThreads.set(threadId, title ?? threadId);
@@ -259,7 +309,14 @@ export class TalkToFleetService extends Context.Service<
                   }),
                 ).then((result) => {
                   if (session.disposed) return;
-                  if (session.cancelledToolCalls.delete(callId)) return;
+                  if (session.cancelledToolCalls.delete(callId)) {
+                    emitEvent(session, { type: "status_detail", message: null });
+                    const bounded = JSON.stringify(boundPhonicToolOutput({ tool: name, result }));
+                    session.providerConn?.sendSystemNote(
+                      `[Browne update] Untrusted late evidence for an interrupted tool call. Use if relevant; do not interrupt Nick to announce it. ${bounded}`,
+                    );
+                    return;
+                  }
                   emitEvent(session, { type: "status_detail", message: null });
                   session.providerConn?.sendToolOutput(callId, result);
                 });
@@ -298,7 +355,7 @@ export class TalkToFleetService extends Context.Service<
         }
       };
 
-      // Single background domain event listener notifies active sessions when tracked threads update.
+      // Single background domain event listener notifies active sessions when tracked or scoped threads update.
       yield* orchestrator.streamDomainEvents.pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
@@ -307,8 +364,11 @@ export class TalkToFleetService extends Context.Service<
             const threadId = event.threadId;
 
             for (const session of sessions.values()) {
-              if (session.disposed || !session.trackedThreads.has(threadId)) continue;
+              if (session.disposed) continue;
+              const isScopedMain = session.scopedThreadId === threadId;
+              if (!isScopedMain && !session.trackedThreads.has(threadId)) continue;
               const threadTitle = session.trackedThreads.get(threadId) ?? "Thread";
+              const tag = isScopedMain ? "[Main session update]" : "[Browne update]";
 
               if (event.type === "runtime-request.updated" && event.payload.status === "pending") {
                 emitEvent(session, {
@@ -325,7 +385,17 @@ export class TalkToFleetService extends Context.Service<
                   },
                 });
                 session.providerConn?.sendSystemNote(
-                  `[Browne update] Thread '${threadTitle}' needs ${event.payload.kind} approval.`,
+                  `${tag} Thread '${threadTitle}' needs ${event.payload.kind} approval.`,
+                );
+              }
+
+              if (
+                event.type === "run.updated" &&
+                isScopedMain &&
+                event.payload.status === "running"
+              ) {
+                session.providerConn?.sendSystemNote(
+                  `${tag} Main thread '${threadTitle}' started a new active run.`,
                 );
               }
 
@@ -338,6 +408,14 @@ export class TalkToFleetService extends Context.Service<
                   .getThreadProjection(threadId)
                   .pipe(Effect.orElseSucceed(() => null));
                 if (session.disposed) continue;
+                const resolvedTitle = projection?.thread.title ?? threadTitle;
+                if (isScopedMain && projection?.thread.title) {
+                  session.scopedThreadTitle = projection.thread.title;
+                  session.trackedThreads.set(threadId, projection.thread.title);
+                }
+                const lastUser = projection?.messages
+                  .filter((m) => m.role === "user" && m.text.trim().length > 0)
+                  .at(-1)?.text;
                 const lastAssistant = projection?.messages
                   .filter((m) => m.role === "assistant" && m.text.trim().length > 0)
                   .at(-1)?.text;
@@ -348,16 +426,24 @@ export class TalkToFleetService extends Context.Service<
                     kind: "thread",
                     id: `thread:${threadId}`,
                     threadId,
-                    title: projection?.thread.title ?? threadTitle,
+                    title: resolvedTitle,
                     status: runStatus === "completed" ? "completed" : "failed",
                     ...(summary ? { summary } : {}),
                     updatedAt: new Date().toISOString(),
                   },
                 });
+                const promptContext =
+                  isScopedMain && lastUser
+                    ? ` (user prompt: ${lastUser.replace(/\s+/gu, " ").trim().slice(0, 120)})`
+                    : "";
                 const note = summary
-                  ? `[Browne update] Thread '${threadTitle}' ${runStatus}: ${summary}`
-                  : `[Browne update] Thread '${threadTitle}' ${runStatus}.`;
-                if (session.phase === "listening" && !session.clientSpeaking) {
+                  ? `${tag} Thread '${resolvedTitle}' ${runStatus}${promptContext}: ${summary}`
+                  : `${tag} Thread '${resolvedTitle}' ${runStatus}${promptContext}.`;
+                if (
+                  session.phase === "listening" &&
+                  !session.clientSpeaking &&
+                  !session.userSpeaking
+                ) {
                   session.providerConn?.generateReply(note);
                 } else {
                   session.providerConn?.sendSystemNote(note);
@@ -435,6 +521,8 @@ export class TalkToFleetService extends Context.Service<
                 sessionId: session.sessionId,
                 provider: session.providerName,
                 model: session.modelName,
+                scopedThreadId: session.scopedThreadId ?? null,
+                scopedThreadTitle: session.scopedThreadTitle,
                 contextBuiltAt: session.contextBuiltAt,
                 degradedSources: session.degradedSources,
               };
@@ -466,11 +554,14 @@ export class TalkToFleetService extends Context.Service<
               phase: "listening",
               providerName: voiceProvider.id,
               modelName: "phonic-1",
+              scopedThreadTitle: null,
               contextBuiltAt: null,
               degradedSources: [],
               activeTranscriptId: null,
               activeTranscriptSpeaker: null,
               clientSpeaking: false,
+              userSpeaking: false,
+              dropAudioUntilNextAssistantTurn: false,
               providerReady: false,
               providerConn: null,
               attached: { connectionId, offer: offerFrame },
@@ -479,9 +570,7 @@ export class TalkToFleetService extends Context.Service<
             };
             sessions.set(sessionId, session);
             socketSession.current = session;
-            void startProviderForSession(session, {
-              welcomeMessage: greet ? "Hey Nick, ik ben er." : null,
-            });
+            void startProviderForSession(session, { greet });
             return session;
           };
 
@@ -502,7 +591,8 @@ export class TalkToFleetService extends Context.Service<
               if (socketSession.current !== null && !socketSession.current.disposed) {
                 return;
               }
-              createSession(msg.threadId ?? queryThreadId, msg.greet !== false);
+              const scoped = msg.mode === "fleet" ? undefined : (msg.threadId ?? queryThreadId);
+              createSession(scoped, msg.greet !== false);
               return;
             }
 
@@ -519,6 +609,15 @@ export class TalkToFleetService extends Context.Service<
               disposeSession(session, "new_session", false);
               const next = createSession(scoped, true);
               attachSession(next);
+              return;
+            }
+
+            if (msg.type === "interrupt_assistant") {
+              session.turnId += 1;
+              session.dropAudioUntilNextAssistantTurn = true;
+              session.clientSpeaking = false;
+              emitEvent(session, { type: "interrupt", turnId: session.turnId });
+              emitEvent(session, { type: "phase", phase: "listening" });
               return;
             }
 

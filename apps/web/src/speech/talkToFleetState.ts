@@ -26,7 +26,10 @@ export interface TalkToFleetWebState {
   readonly phase: TalkToFleetWebPhase;
   readonly environmentId: EnvironmentId | null;
   readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly selectedMicrophoneId: string;
   readonly scopedThreadId: string | null;
+  readonly scopedThreadTitle: string | null;
+  readonly mode: "thread" | "fleet";
   readonly sessionId: string | null;
   readonly lastEventSeq: number;
   readonly activeTurnId: number;
@@ -47,6 +50,7 @@ export interface TalkToFleetWebState {
 export function createInitialTalkToFleetWebState(options?: {
   readonly showCaptions?: boolean;
   readonly selectedEnvironmentId?: EnvironmentId | null;
+  readonly selectedMicrophoneId?: string;
 }): TalkToFleetWebState {
   return {
     panelOpen: false,
@@ -54,7 +58,10 @@ export function createInitialTalkToFleetWebState(options?: {
     phase: "idle",
     environmentId: null,
     selectedEnvironmentId: options?.selectedEnvironmentId ?? null,
+    selectedMicrophoneId: options?.selectedMicrophoneId ?? "",
     scopedThreadId: null,
+    scopedThreadTitle: null,
+    mode: "fleet",
     sessionId: null,
     lastEventSeq: 0,
     activeTurnId: 0,
@@ -128,14 +135,18 @@ export function reduceTalkToFleetWebEvent(
   const lastEventSeq = Math.max(state.lastEventSeq, event.seq);
 
   switch (event.type) {
-    case "ready":
+    case "ready": {
       if (state.sessionId === event.sessionId && event.seq <= state.lastEventSeq) {
         return state;
       }
+      const nextThreadId = event.scopedThreadId ?? state.scopedThreadId;
       return {
         ...state,
         lastEventSeq: event.seq,
         sessionId: event.sessionId,
+        scopedThreadId: nextThreadId,
+        scopedThreadTitle: event.scopedThreadTitle ?? state.scopedThreadTitle,
+        mode: nextThreadId ? "thread" : state.mode,
         provider: event.provider,
         model: event.model,
         contextBuiltAt: event.contextBuiltAt,
@@ -143,6 +154,7 @@ export function reduceTalkToFleetWebEvent(
         error: null,
         statusDetail: null,
       };
+    }
     case "phase":
       return {
         ...state,
@@ -197,6 +209,7 @@ export function reduceTalkToFleetWebEvent(
         lastEventSeq,
         phase: "ended",
         sessionId: null,
+        scopedThreadTitle: null,
         statusDetail: null,
         outputLevel: 0,
       };

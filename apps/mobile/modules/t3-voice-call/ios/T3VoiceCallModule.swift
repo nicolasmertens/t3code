@@ -9,6 +9,7 @@ public final class T3VoiceCallModule: Module {
   private var pingTimer: DispatchSourceTimer?
   private var initialConfigJson: String?
   private var intentionalStop = false
+  private var currentRouteName = "Speaker"
 
   private let delegateQueue: OperationQueue = {
     let queue = OperationQueue()
@@ -33,7 +34,11 @@ public final class T3VoiceCallModule: Module {
         self?.sendEvent("onLevel", ["level": level])
       }
       self.audio.onRouteChange = { [weak self] route in
+        self?.withLock { self?.currentRouteName = route }
         self?.sendEvent("onRoute", ["route": route])
+      }
+      self.audio.onSpeakingChange = { [weak self] speaking in
+        self?.sendPlaybackState(speaking: speaking)
       }
       self.audio.onError = { [weak self] message in
         self?.sendEvent("onError", ["message": message])
@@ -71,6 +76,10 @@ public final class T3VoiceCallModule: Module {
       try self.audio.setSpeaker(speaker)
     }
 
+    Function("interruptPlayback") {
+      self.audio.interruptPlayback()
+    }
+
     Function("sendControl") { (json: String) in
       guard let socketTask = self.withLock({ self.task }) else { return }
       socketTask.send(.string(json)) { [weak self] error in
@@ -91,6 +100,20 @@ public final class T3VoiceCallModule: Module {
     // Dev clients register URLProtocol classes that intercept WebSocket upgrades.
     configuration.protocolClasses = []
     return URLSession(configuration: configuration, delegate: VoiceCallSocketDelegate(module: self), delegateQueue: delegateQueue)
+  }
+
+  private func sendPlaybackState(speaking: Bool) {
+    let (socketTask, route) = withLock { (self.task, self.currentRouteName) }
+    guard let socketTask, socketTask.state == .running else { return }
+    let payload: [String: Any] = [
+      "type": "playback_state",
+      "speaking": speaking,
+      "route": route,
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload),
+      let json = String(data: data, encoding: .utf8)
+    else { return }
+    socketTask.send(.string(json)) { _ in }
   }
 
   private func sendAudioFrame(_ pcm: Data) {

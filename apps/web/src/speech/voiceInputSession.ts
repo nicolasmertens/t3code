@@ -493,3 +493,10 @@ export function useVoiceOwnerPresented(ownerKey: string | null): boolean {
     () => ownerKey !== null && presentedOwners.has(ownerKey),
   );
 }
+
+/** Cancels any active dictation recordings before full-duplex live voice claims the microphone. */
+export function cancelAllActiveVoiceInputSessions(): void {
+  for (const session of sessions.keys()) {
+    session.cancel();
+  }
+}

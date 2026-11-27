@@ -6,7 +6,7 @@ declare class AudioWorkletProcessor {
 }
 declare function registerProcessor(name: string, processor: typeof AudioWorkletProcessor): void;
 
-const TARGET_FRAME_SAMPLES = 1_600;
+const TARGET_FRAME_SAMPLES = 640;
 
 class TalkToFleetCaptureProcessor extends AudioWorkletProcessor {
   private readonly resampler = new PcmResampler(sampleRate);

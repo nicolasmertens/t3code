@@ -186,3 +186,9 @@ export function parseXResearchCommand(text: string): { prompt: string } | null {
   const match = /^\/x(?:\s+([\s\S]*))?$/i.exec(text.trim());
   return match ? { prompt: match[1]?.trim() ?? "" } : null;
 }
+
+/** `/talk` opens the main-session voice sidechat beside the current thread. */
+export function parseTalkCommand(text: string): { prompt: string } | null {
+  const match = /^\/talk(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  return match ? { prompt: match[1]?.trim() ?? "" } : null;
+}

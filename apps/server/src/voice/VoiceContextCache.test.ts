@@ -3,10 +3,12 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 import {
   buildVoiceBriefing,
   capBriefingBytes,
+  fetchActiveFleetDigest,
   fetchMailDigest,
   fetchPlanDigest,
   fetchWikiDigest,
@@ -20,7 +22,7 @@ describe("VoiceContextCache", () => {
     expect(capped).toContain("[Briefing truncated");
   });
 
-  it("surfaces offline sources explicitly in briefing degradedSources", () => {
+  it("surfaces offline sources explicitly and puts scoped main session before Fleet sections", () => {
     const briefing = buildVoiceBriefing({
       external: {
         builtAt: "2026-11-26T15:00:00.000Z",
@@ -28,6 +30,47 @@ describe("VoiceContextCache", () => {
         planStatus: { status: "ok", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
         mailSummary: "Postroom mail unavailable (maxbook offline or asleep).",
         mailStatus: { status: "offline", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
+        fleetDigest: "Active Fleet context unavailable.",
+        fleetStatus: { status: "offline", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
+        wikiSummary: "### topics/voice.md\nUse Phonic STS.",
+        wikiStatus: { status: "ok", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
+      },
+      live: {
+        projects: ["Browne"],
+        attentionThreads: [],
+        activeThreads: [],
+        scopedThread: {
+          id: "thread-main",
+          title: "Voice SOTA Main Session",
+          projectTitle: "Browne",
+          status: "running",
+          branch: "feat/browne",
+          pendingRequests: [],
+          recentActivity: ["cmd (exit 0): vp test run"],
+          recentMessages: [{ role: "user", text: "Fix echo and add Mac sidechat" }],
+        },
+      },
+    });
+
+    expect(briefing.degradedSources).toEqual(["maxbook"]);
+    expect(briefing.text).toContain("Degraded offline sources: maxbook");
+    expect(briefing.text).toContain("Focus: Ship Browne voice");
+    expect(briefing.text.indexOf("## ACTIVE MAIN SESSION")).toBeLessThan(
+      briefing.text.indexOf("## Live Browne State"),
+    );
+    expect(briefing.text).toContain("Voice SOTA Main Session");
+  });
+
+  it("distinguishes partial maxbook degradation between postroom and fleet-context", () => {
+    const briefing = buildVoiceBriefing({
+      external: {
+        builtAt: "2026-11-26T15:00:00.000Z",
+        planSummary: "Focus: Ship Browne voice",
+        planStatus: { status: "ok", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
+        mailSummary: "- [2026-11-26] Victor: Invoice",
+        mailStatus: { status: "ok", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
+        fleetDigest: "Active Fleet context unavailable.",
+        fleetStatus: { status: "offline", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
         wikiSummary: "### topics/voice.md\nUse Phonic STS.",
         wikiStatus: { status: "ok", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
       },
@@ -38,9 +81,7 @@ describe("VoiceContextCache", () => {
       },
     });
 
-    expect(briefing.degradedSources).toEqual(["maxbook"]);
-    expect(briefing.text).toContain("Degraded offline sources: maxbook");
-    expect(briefing.text).toContain("Focus: Ship Browne voice");
+    expect(briefing.degradedSources).toEqual(["fleet-context"]);
   });
 
   it("parses plan now.json and reports journal offline when SSH fails", async () => {
@@ -65,21 +106,30 @@ describe("VoiceContextCache", () => {
     expect(offlinePlan.status.status).toBe("offline");
   });
 
-  it("parses Postroom mail output and flags offline MaxBook", async () => {
-    const okMail = await fetchMailDigest(async () => ({
-      ok: true,
-      stdout: JSON.stringify({
-        shown: [
-          {
-            subject: "Invoice Q4",
-            receivedAt: "2026-11-26T14:20:00Z",
-            preview: "Please review attached invoice",
-            from: [{ name: "Victor", email: "victor@mrtns.io" }],
-          },
-        ],
-      }),
-      stderr: "",
-    }));
+  it("queries Postroom with --since instead of empty positional query and parses mail output", async () => {
+    let capturedCommand = "";
+    const okMail = await fetchMailDigest(
+      async (_cmd, args) => {
+        capturedCommand = args[args.length - 1] ?? "";
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            shown: [
+              {
+                subject: "Invoice Q4",
+                receivedAt: "2026-11-26T14:20:00Z",
+                preview: "Please review attached invoice",
+                from: [{ name: "Victor", email: "victor@mrtns.io" }],
+              },
+            ],
+          }),
+          stderr: "",
+        };
+      },
+      DateTime.toDateUtc(DateTime.makeUnsafe("2026-11-27T15:00:00Z")),
+    );
+    expect(capturedCommand).toContain("--since 2026-11-20");
+    expect(capturedCommand).not.toContain("''");
     expect(okMail.status.status).toBe("ok");
     expect(okMail.summary).toContain("Victor: Invoice Q4");
 
@@ -89,6 +139,19 @@ describe("VoiceContextCache", () => {
       stderr: "Operation timed out",
     }));
     expect(offlineMail.status.status).toBe("offline");
+  });
+
+  it("parses active Fleet context digest from maxbook snapshot", async () => {
+    const okFleet = await fetchActiveFleetDigest(async () => ({
+      ok: true,
+      stdout: JSON.stringify({
+        builtAt: "2026-11-27T14:36:53-05:00",
+        lines: ["- [whatsapp 2026-11-27 14:18] John Collin: Meeting update"],
+      }),
+      stderr: "",
+    }));
+    expect(okFleet.status.status).toBe("ok");
+    expect(okFleet.summary).toContain("John Collin");
   });
 
   it("reads recent markdown highlights from local wiki dir", async () => {

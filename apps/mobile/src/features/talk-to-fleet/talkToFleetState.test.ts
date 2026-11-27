@@ -92,6 +92,8 @@ describe("talkToFleetState", () => {
       type: "ready",
       seq: 4,
       sessionId: "sess-abc",
+      scopedThreadId: "thread-42",
+      scopedThreadTitle: "Voice polish",
       provider: "phonic",
       model: "phonic-1",
       contextBuiltAt: "2026-11-26T10:00:00.000Z",
@@ -103,6 +105,8 @@ describe("talkToFleetState", () => {
       phase: "speaking",
     });
     expect(state.sessionId).toBe("sess-abc");
+    expect(state.scopedThreadId).toBe("thread-42");
+    expect(state.scopedThreadTitle).toBe("Voice polish");
     expect(state.degradedSources).toEqual(["maxbook"]);
     expect(isTalkToFleetActivePhase(state.phase)).toBe(true);
 
@@ -130,6 +134,7 @@ describe("talkToFleetState", () => {
     });
     expect(state.phase).toBe("ended");
     expect(state.sessionId).toBeNull();
+    expect(state.scopedThreadTitle).toBeNull();
     expect(isTalkToFleetActivePhase(state.phase)).toBe(false);
   });
 });

@@ -41,6 +41,7 @@ import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from "@dn
 import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  AudioLinesIcon,
   Bot,
   CircleDotIcon,
   Smartphone,
@@ -117,6 +118,8 @@ import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
 import { surfaceShortcutKey } from "~/lib/surfaceShortcutKey";
+import { useTalkToFleetState } from "~/speech/talkToFleetClient";
+import { isTalkToFleetWebActive } from "~/speech/talkToFleetState";
 
 export interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -130,6 +133,7 @@ export interface RightPanelTabsProps {
   layoutControls?: ReactNode;
   surfaces: readonly RightPanelSurface[];
   environmentId: EnvironmentId | null;
+  threadId?: ThreadId | null;
   activeSurfaceId: string | null;
   pendingSurfaceIds: ReadonlySet<string>;
   previewSessions: Readonly<Record<string, PreviewSessionSnapshot>>;
@@ -163,6 +167,8 @@ export interface RightPanelTabsProps {
   onAddSideChat?: (() => void) | undefined;
   /** Absent where side chats are not offered. */
   onAddXResearch?: (() => void) | undefined;
+  /** Absent where voice sidechat is not offered. */
+  onAddVoice?: (() => void) | undefined;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -176,6 +182,8 @@ export interface RightPanelTabsProps {
   xResearchAvailable?: boolean;
   /** Overrides the default reason while X research side chats are available but cannot start. */
   xResearchDisabledReason?: string | null;
+  voiceAvailable?: boolean;
+  voiceDisabledReason?: string | null;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -204,6 +212,7 @@ const SURFACE_DISABLED_REASONS = {
   device: msg("Devices are only available from a thread."),
   sideChat: msg("Side chats start after the first message."),
   xResearch: msg("X research side chats start after the first message."),
+  voice: msg("Voice sidechat starts after the first message."),
 } as const;
 
 // Closed keepMounted popups must stop blocking shortcuts once their exit transition ends.
@@ -230,6 +239,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   device: msg("Available from a thread."),
   sideChat: msg("Available after the first message."),
   xResearch: msg("Available after the first message."),
+  voice: msg("Available on active server threads."),
 } as const;
 
 type TabContextMenuAction =
@@ -356,6 +366,8 @@ function RightPanelEmptyState(props: {
   onAddSideChat?: (() => void) | undefined;
   /** Absent where side chats are not offered. */
   onAddXResearch?: (() => void) | undefined;
+  /** Absent where voice sidechat is not offered. */
+  onAddVoice?: (() => void) | undefined;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -367,6 +379,8 @@ function RightPanelEmptyState(props: {
   sideChatDisabledReason: string | null;
   xResearchAvailable: boolean;
   xResearchDisabledReason: string | null;
+  voiceAvailable: boolean;
+  voiceDisabledReason: string | null;
 }) {
   const gt = useGT();
   const messages = useMessages();
@@ -455,6 +469,19 @@ function RightPanelEmptyState(props: {
             disabledReason:
               props.xResearchDisabledReason ?? messages(SURFACE_UNAVAILABLE_HINTS.xResearch),
             onClick: props.onAddXResearch,
+          },
+        ]
+      : []),
+    ...(props.onAddVoice
+      ? [
+          {
+            label: msg("Voice"),
+            description: msg("Talk hands-free with this main session and fleet."),
+            icon: AudioLinesIcon,
+            shortcut: "V",
+            available: props.voiceAvailable && !props.voiceDisabledReason,
+            disabledReason: props.voiceDisabledReason ?? messages(SURFACE_UNAVAILABLE_HINTS.voice),
+            onClick: props.onAddVoice,
           },
         ]
       : []),
@@ -657,6 +684,8 @@ function surfaceTitle(
         surface,
         resolve(msg("Thread on {label}", { label: surface.label })),
       );
+    case "voice":
+      return resolve(msg("Voice"));
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return resolve(msg("Browser"));
@@ -708,6 +737,7 @@ function SurfaceIcon({
   previewCapturedUrl,
   theme,
   environmentId,
+  threadId,
   pullRequestStatusSeed,
 }: {
   surface: RightPanelSurface;
@@ -715,6 +745,7 @@ function SurfaceIcon({
   previewCapturedUrl: string | null;
   theme: "light" | "dark";
   environmentId: EnvironmentId | null;
+  threadId: ThreadId | null;
   pullRequestStatusSeed: PullRequestTabStatusSeed | undefined;
 }) {
   switch (surface.kind) {
@@ -751,6 +782,8 @@ function SurfaceIcon({
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
     case "linked-thread":
       return <MessagesSquare className="size-3 shrink-0" />;
+    case "voice":
+      return <VoiceTabIcon environmentId={environmentId} threadId={threadId} />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -778,6 +811,27 @@ function sideChatTabState(shell: EnvironmentThreadShell | null) {
     return "needs input";
   }
   return threadRuntimeIsActive(shell.runtime) ? "running" : null;
+}
+
+function VoiceTabIcon(props: { environmentId: EnvironmentId | null; threadId: ThreadId | null }) {
+  const fleetState = useTalkToFleetState();
+  const isLive =
+    isTalkToFleetWebActive(fleetState.phase) &&
+    props.environmentId !== null &&
+    props.threadId !== null &&
+    fleetState.environmentId === props.environmentId &&
+    fleetState.scopedThreadId === props.threadId;
+  return (
+    <>
+      <AudioLinesIcon className="size-3 shrink-0" />
+      {isLive ? (
+        <span
+          className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary animate-pulse"
+          aria-hidden
+        />
+      ) : null}
+    </>
+  );
 }
 
 // Static dots: a side chat or subagent tab can stay open for a whole run.
@@ -982,6 +1036,7 @@ function RightPanelTab(
     previewCapturedUrl: string | null;
     theme: "light" | "dark";
     environmentId: EnvironmentId | null;
+    threadId: ThreadId | null;
     pullRequestStatusSeed: PullRequestTabStatusSeed | undefined;
     renaming: boolean;
     canRename: boolean;
@@ -1026,6 +1081,7 @@ function RightPanelTab(
           previewCapturedUrl={props.previewCapturedUrl}
           theme={props.theme}
           environmentId={props.environmentId}
+          threadId={props.threadId}
           pullRequestStatusSeed={props.pullRequestStatusSeed}
         />
         {props.pending ? (
@@ -1312,6 +1368,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           },
         ]
       : []),
+    ...(props.onAddVoice
+      ? [
+          {
+            label: msg("Voice"),
+            icon: AudioLinesIcon,
+            shortcut: "V",
+            available: props.voiceAvailable === true && !props.voiceDisabledReason,
+            disabledReason: props.voiceDisabledReason ?? messages(SURFACE_DISABLED_REASONS.voice),
+            onClick: props.onAddVoice,
+          },
+        ]
+      : []),
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1575,6 +1643,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     previewCapturedUrl={favicon.capturedUrl}
                     theme={resolvedTheme}
                     environmentId={props.environmentId}
+                    threadId={props.threadId ?? null}
                     pullRequestStatusSeed={props.pullRequestStatusSeeds?.[surface.id]}
                     renaming={renamingDevice === surface.id}
                     canRename={props.onRenameDevice !== undefined}
@@ -1738,6 +1807,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddDevice={props.onAddDevice}
             onAddSideChat={props.onAddSideChat}
             onAddXResearch={props.onAddXResearch}
+            onAddVoice={props.onAddVoice}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
@@ -1749,6 +1819,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             sideChatDisabledReason={props.sideChatDisabledReason ?? null}
             xResearchAvailable={props.xResearchAvailable === true}
             xResearchDisabledReason={props.xResearchDisabledReason ?? null}
+            voiceAvailable={props.voiceAvailable === true}
+            voiceDisabledReason={props.voiceDisabledReason ?? null}
           />
         ) : (
           props.children

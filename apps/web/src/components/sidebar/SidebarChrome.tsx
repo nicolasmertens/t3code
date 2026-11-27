@@ -8,10 +8,14 @@ import {
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
 import { memo } from "react";
-import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { useAtomValue } from "@effect/atom-react";
+import { useRightPanelStore } from "../../rightPanelStore";
 import { talkToFleetController, useTalkToFleetActive } from "../../speech/talkToFleetClient";
+import { readEnvironmentScope } from "../../state/session";
+import { resolveThreadRouteTarget } from "../../threadRoutes";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
@@ -242,6 +246,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const pullRequestsSupported = usePullRequestsSupported();
   const issuesSupported = useIssuesSupported();
   const talkToFleetLive = useTalkToFleetActive();
+  const routeParams = useParams({ strict: false }) as Partial<
+    Record<"environmentId" | "threadId" | "draftId", string | undefined>
+  >;
+  const activeRouteTarget = resolveThreadRouteTarget(routeParams);
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -249,6 +257,21 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
   const handleTalkToFleetClick = () => {
     closeMobileSidebar();
+    if (
+      !isOnUtilityPage &&
+      activeRouteTarget?.kind === "server" &&
+      readEnvironmentScope(activeRouteTarget.threadRef.environmentId, AuthOrchestrationOperateScope)
+    ) {
+      useRightPanelStore.getState().open(activeRouteTarget.threadRef, "voice");
+      if (!talkToFleetLive) {
+        void talkToFleetController.start(activeRouteTarget.threadRef.environmentId, {
+          threadId: activeRouteTarget.threadRef.threadId,
+          mode: "thread",
+          openFloatingPanel: false,
+        });
+      }
+      return;
+    }
     talkToFleetController.openPanel();
   };
   const handlePullRequestsClick = () => {

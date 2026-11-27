@@ -8,6 +8,7 @@ import {
   CaptionsIcon,
   CheckIcon,
   ExternalLinkIcon,
+  HandIcon,
   LoaderCircleIcon,
   Maximize2Icon,
   MicIcon,
@@ -18,8 +19,18 @@ import {
   RotateCcwIcon,
   XIcon,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import { useRightPanelStore } from "../../rightPanelStore";
+import { type BrowserMicrophone, listBrowserMicrophones } from "../../speech/browserMicrophones";
+import {
+  talkToFleetController,
+  useIsVoicePaneVisible,
+  useTalkToFleetLevels,
+  useTalkToFleetState,
+} from "../../speech/talkToFleetClient";
+import { isTalkToFleetWebActive, type TalkToFleetWebPhase } from "../../speech/talkToFleetState";
 import {
   useConnectedEnvironmentIds,
   useEnvironments,
@@ -28,8 +39,6 @@ import {
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import { talkToFleetController, useTalkToFleetState } from "../../speech/talkToFleetClient";
-import { isTalkToFleetWebActive, type TalkToFleetWebPhase } from "../../speech/talkToFleetState";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -110,14 +119,40 @@ export function TalkToFleetPanel() {
   const gt = useGT();
   const navigate = useNavigate();
   const state = useTalkToFleetState();
+  const levels = useTalkToFleetLevels();
+  const voicePaneVisible = useIsVoicePaneVisible(state.scopedThreadId);
   const { environments } = useEnvironments();
   const connectedIds = useConnectedEnvironmentIds();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const respondApprovalCommand = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
+  const [microphones, setMicrophones] = useState<ReadonlyArray<BrowserMicrophone>>([]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads browser audio input devices for the microphone selector
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return;
+      void listBrowserMicrophones()
+        .then((items) => {
+          if (!cancelled) setMicrophones(items);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const devices = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
+    devices?.addEventListener?.("devicechange", refresh);
+    return () => {
+      cancelled = true;
+      devices?.removeEventListener?.("devicechange", refresh);
+    };
+  }, []);
 
   const active = isTalkToFleetWebActive(state.phase);
+  if (active && state.scopedThreadId !== null && voicePaneVisible) {
+    return null;
+  }
   if (!state.panelOpen && !active) {
     return null;
   }
@@ -142,10 +177,25 @@ export function TalkToFleetPanel() {
   const targetEnvironmentId = state.environmentId ?? resolvedEnvironment?.environmentId ?? null;
   const targetEnvironmentLabel = resolvedEnvironment?.label ?? gt("No environment");
 
-  const level = Math.max(state.inputLevel, state.outputLevel);
+  const level = Math.max(levels.input, levels.output);
   const phaseLabel = state.statusDetail ?? resolvePhaseLabel(gt, state.phase);
+  const selectedMicValue = state.selectedMicrophoneId || "__default__";
+  const selectedMicLabel = state.selectedMicrophoneId
+    ? (microphones.find((mic) => mic.deviceId === state.selectedMicrophoneId)?.label ??
+      gt("Saved mic"))
+    : gt("Default mic");
 
-  if (state.minimized && active) {
+  const returnToScopedThread = () => {
+    if (!targetEnvironmentId || !state.scopedThreadId) return;
+    const ref = scopeThreadRef(targetEnvironmentId, ThreadId.make(state.scopedThreadId));
+    useRightPanelStore.getState().open(ref, "voice");
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(ref),
+    });
+  };
+
+  if (active && (state.minimized || !state.panelOpen)) {
     return (
       <div className="fixed right-4 bottom-4 z-50 [-webkit-app-region:no-drag]">
         <div className="flex items-center gap-2 rounded-full border border-border bg-popover/95 px-3 py-1.5 shadow-lg backdrop-blur-md">
@@ -159,8 +209,8 @@ export function TalkToFleetPanel() {
                   : "bg-success",
             )}
           />
-          <span className="max-w-32 truncate text-xs font-medium text-foreground">
-            {phaseLabel}
+          <span className="max-w-36 truncate text-xs font-medium text-foreground">
+            {state.scopedThreadTitle || phaseLabel}
           </span>
           <WaveformBars
             level={level}
@@ -168,6 +218,17 @@ export function TalkToFleetPanel() {
             speaking={state.phase === "speaking"}
             compact
           />
+          {state.scopedThreadId && targetEnvironmentId ? (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label={gt("Return to active thread voice sidechat")}
+              onClick={returnToScopedThread}
+            >
+              <ExternalLinkIcon />
+            </Button>
+          ) : null}
           <Button
             type="button"
             size="icon-xs"
@@ -182,7 +243,13 @@ export function TalkToFleetPanel() {
             size="icon-xs"
             variant="ghost"
             aria-label={gt("Expand Talk to Fleet")}
-            onClick={() => talkToFleetController.toggleMinimize()}
+            onClick={() => {
+              if (!state.panelOpen) {
+                talkToFleetController.openPanel();
+              } else {
+                talkToFleetController.toggleMinimize();
+              }
+            }}
           >
             <Maximize2Icon />
           </Button>
@@ -272,8 +339,29 @@ export function TalkToFleetPanel() {
             </SelectPopup>
           </Select>
         ) : (
-          <span className="truncate text-xs text-muted-foreground">{targetEnvironmentLabel}</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            {targetEnvironmentLabel}
+          </span>
         )}
+        <Select
+          value={selectedMicValue}
+          onValueChange={(value) => {
+            const nextId = !value || value === "__default__" ? "" : value;
+            void talkToFleetController.setMicrophoneId(nextId);
+          }}
+        >
+          <SelectTrigger size="sm" aria-label={gt("Microphone")} className="h-7 w-32 shrink-0">
+            <SelectValue>{selectedMicLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            <SelectItem value="__default__">{gt("Default mic")}</SelectItem>
+            {microphones.map((mic) => (
+              <SelectItem key={mic.deviceId} value={mic.deviceId}>
+                {mic.label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
         {state.degradedSources.length > 0 ? (
           <span className="inline-flex shrink-0 items-center gap-1 text-2xs text-warning-foreground">
             <AlertTriangleIcon className="size-3" />
@@ -285,15 +373,28 @@ export function TalkToFleetPanel() {
       <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-3.5 py-3">
         <div className="flex flex-col items-center justify-center rounded-xl border border-border/60 bg-background/60 px-3 py-3">
           <WaveformBars level={level} active={active} speaking={state.phase === "speaking"} />
-          <p className="mt-1.5 text-center text-xs text-muted-foreground">
-            {active
-              ? state.muted
-                ? gt("Microphone muted")
-                : gt("Speak naturally anytime. Interrupt to steer.")
-              : state.phase === "ended"
-                ? gt("Session ended")
-                : gt("Start a hands-free voice session with Fleet.")}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2">
+            <p className="text-center text-xs text-muted-foreground">
+              {active
+                ? state.muted
+                  ? gt("Microphone muted")
+                  : gt("Speak naturally anytime. Interrupt to steer.")
+                : state.phase === "ended"
+                  ? gt("Session ended")
+                  : gt("Start a hands-free voice session with Fleet.")}
+            </p>
+            {active && state.phase === "speaking" ? (
+              <Button
+                type="button"
+                size="micro"
+                variant="outline"
+                onClick={() => talkToFleetController.interruptAssistant()}
+              >
+                <HandIcon />
+                {gt("Interrupt")}
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         {state.error ? (

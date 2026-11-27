@@ -32,6 +32,7 @@ const RIGHT_PANEL_KINDS = [
   "issue",
   "thread",
   "linked-thread",
+  "voice",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -109,7 +110,9 @@ export type RightPanelSurface =
    */
   | ThreadSurface
   /** A linked environment's thread, read through `viaEnvironmentId`; it has no thread here. */
-  | LinkedThreadSurface;
+  | LinkedThreadSurface
+  /** Live full-duplex Voice sidechat scoped to this main session. */
+  | { id: "voice"; kind: "voice" };
 
 export type ThreadSurface = { id: `thread:${string}`; kind: "thread"; threadId: ThreadId };
 
@@ -130,7 +133,7 @@ export function decodeThreadSurface(surface: object): ThreadSurface | null {
 }
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-const RIGHT_PANEL_STORAGE_VERSION = 16;
+const RIGHT_PANEL_STORAGE_VERSION = 17;
 
 export const PULL_REQUESTS_PANEL_REF = scopeThreadRef(
   EnvironmentId.make("pull-requests-panel"),
@@ -299,6 +302,8 @@ const singletonSurface = (
       return { id: "pull-requests", kind };
     case "device":
       return { id: "device", kind };
+    case "voice":
+      return { id: "voice", kind };
   }
 };
 
@@ -616,6 +621,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     }
                     // Also drops kinds this build does not know, such as one a newer build saved.
                     if (!(RIGHT_PANEL_KINDS as ReadonlyArray<unknown>).includes(kind)) return [];
+                    if (surface.kind === "voice") {
+                      return surface.id === "voice" ? [{ id: "voice", kind: "voice" }] : [];
+                    }
                     if (surface.kind === "linked-thread") {
                       const decoded = decodeLinkedThreadSurface(surface);
                       return decoded === null ? [] : [decoded];

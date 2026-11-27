@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
@@ -1392,5 +1392,36 @@ describe("rightPanelStore", () => {
     store.reconcileBrowserSurfaces(refA, ["tab-a", "tab-b"]);
     expect(surfaceIds()).toEqual(["browser:tab-a", "terminal:term-1", "diff", "browser:tab-b"]);
     expect(store.getUserActionRevision(refA)).toBe(revision);
+  });
+
+  it("opens a voice sidechat singleton tab and retains valid voice surfaces across persistence", async () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "voice");
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "voice",
+      kind: "voice",
+    });
+
+    const { storage, name } = useRightPanelStore.persist.getOptions();
+    await storage!.setItem(name!, {
+      version: 16,
+      state: {
+        byThreadKey: {
+          [scopedThreadKey(refA)]: {
+            isOpen: true,
+            activeSurfaceId: "voice",
+            surfaces: [
+              { id: "voice", kind: "voice" },
+              { id: "voice:bad", kind: "voice" },
+            ],
+          },
+        },
+        threadPanelVisibilityByThreadKey: {},
+      },
+    });
+    await useRightPanelStore.persist.rehydrate();
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([{ id: "voice", kind: "voice" }]);
   });
 });

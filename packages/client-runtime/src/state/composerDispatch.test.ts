@@ -52,6 +52,7 @@ it("treats only the commands the composer runs itself as local", () => {
   const none = {
     holdsOnlyText: true,
     sideChat: false,
+    voiceChat: false,
     usageLimits: false,
     codexFeedback: false,
     freshSession: false,
@@ -59,6 +60,7 @@ it("treats only the commands the composer runs itself as local", () => {
   const all = {
     ...none,
     sideChat: true,
+    voiceChat: true,
     usageLimits: true,
     codexFeedback: true,
     freshSession: true,
@@ -66,6 +68,7 @@ it("treats only the commands the composer runs itself as local", () => {
   for (const text of [
     "/btw why?",
     "/x expo widgets",
+    "/talk",
     "/usage-limits",
     "/feedback slow",
     "/clear",
@@ -75,6 +78,7 @@ it("treats only the commands the composer runs itself as local", () => {
   }
   expect(composerRunsDraftLocally({ ...all, text: "fix the bug" })).toBe(false);
   expect(composerRunsDraftLocally({ ...all, holdsOnlyText: false, text: "/clear" })).toBe(false);
+  expect(composerRunsDraftLocally({ ...all, holdsOnlyText: false, text: "/talk" })).toBe(false);
   expect(composerRunsDraftLocally({ ...all, holdsOnlyText: false, text: "/side why?" })).toBe(true);
   expect(composerRunsDraftLocally({ ...all, holdsOnlyText: false, text: "/x expo" })).toBe(true);
 });

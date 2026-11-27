@@ -24,6 +24,7 @@ export interface VoiceCallNativeBridge {
   stop(): void;
   setMuted(muted: boolean): void;
   setSpeaker(speaker: boolean): void;
+  interruptPlayback(): void;
   sendControl(json: string): void;
   addListener(
     event: "onState",
@@ -56,6 +57,7 @@ export function getVoiceCallNativeBridge(): VoiceCallNativeBridge {
     stop() {},
     setMuted() {},
     setSpeaker() {},
+    interruptPlayback() {},
     sendControl() {},
     addListener() {
       return { remove() {} };

@@ -17,6 +17,7 @@ import { m } from "../i18n/messages";
 import { readEnvironmentScope, readPreparedConnection } from "../state/session";
 import { chooseRecordingMicrophone } from "./browserMicrophones";
 import { runEnvironmentSpeech } from "./runEnvironmentSpeech";
+import talkToFleetPlaybackWorkletUrl from "./talkToFleetPlaybackWorklet.ts?worker&url";
 import {
   TALK_TO_FLEET_WEB_GIVE_UP_MS,
   TALK_TO_FLEET_WEB_RECONNECT_DELAYS_MS,
@@ -26,10 +27,26 @@ import {
   reduceTalkToFleetWebEvent,
 } from "./talkToFleetState";
 import talkToFleetWorkletUrl from "./talkToFleetWorklet.ts?worker&url";
+import { cancelAllActiveVoiceInputSessions } from "./voiceInputSession";
 
 const STORAGE_CAPTIONS_KEY = "t3.talkToFleet.showCaptions";
 const STORAGE_ENV_KEY = "t3.talkToFleet.selectedEnvironmentId";
+const STORAGE_MIC_KEY = "t3.talkToFleet.microphoneId";
 const decodeServerEvent = Schema.decodeUnknownSync(Schema.fromJsonString(TalkToFleetServerEvent));
+
+export interface TalkToFleetAudioLevels {
+  readonly input: number;
+  readonly output: number;
+}
+
+export interface StartTalkToFleetWebOptions {
+  readonly threadId?: string | undefined;
+  readonly threadTitle?: string | null | undefined;
+  readonly mode?: "thread" | "fleet" | undefined;
+  readonly openFloatingPanel?: boolean | undefined;
+}
+
+const ZERO_LEVELS: TalkToFleetAudioLevels = { input: 0, output: 0 };
 
 function readStorageString(key: string): string | null {
   if (typeof window === "undefined") return null;
@@ -43,7 +60,7 @@ function readStorageString(key: string): string | null {
 function writeStorageString(key: string, value: string | null): void {
   if (typeof window === "undefined") return;
   try {
-    if (value === null) {
+    if (value === null || value === "") {
       window.localStorage.removeItem(key);
     } else {
       window.localStorage.setItem(key, value);
@@ -63,6 +80,10 @@ function readInitialEnvironmentId(): EnvironmentId | null {
   return raw && raw.trim().length > 0 ? (raw as EnvironmentId) : null;
 }
 
+function readInitialMicrophoneId(): string {
+  return readStorageString(STORAGE_MIC_KEY) ?? "";
+}
+
 function createPlaybackAudioContext(): AudioContext {
   try {
     return new AudioContext({
@@ -78,7 +99,8 @@ async function openVoiceMicrophone(microphoneId: string): Promise<MediaStream> {
   const voiceProcessing: MediaTrackConstraints = {
     echoCancellation: true,
     noiseSuppression: true,
-    autoGainControl: false,
+    autoGainControl: true,
+    channelCount: 1,
   };
   const preferred: MediaStreamConstraints = {
     audio: microphoneId
@@ -100,8 +122,11 @@ function createTalkToFleetController() {
   let state: TalkToFleetWebState = createInitialTalkToFleetWebState({
     showCaptions: readInitialCaptions(),
     selectedEnvironmentId: readInitialEnvironmentId(),
+    selectedMicrophoneId: readInitialMicrophoneId(),
   });
   const listeners = new Set<() => void>();
+  let levels: TalkToFleetAudioLevels = ZERO_LEVELS;
+  const levelListeners = new Set<() => void>();
 
   let socket: WebSocket | null = null;
   let captureStream: MediaStream | null = null;
@@ -110,8 +135,10 @@ function createTalkToFleetController() {
   let captureWorklet: AudioWorkletNode | null = null;
   let captureSilenceGain: GainNode | null = null;
   let playbackContext: AudioContext | null = null;
-  const activePlaybackSources = new Set<AudioBufferSourceNode>();
-  let nextPlayTime = 0;
+  let playbackWorklet: AudioWorkletNode | null = null;
+  let playbackDestination: MediaStreamAudioDestinationNode | null = null;
+  let playbackAudioEl: HTMLAudioElement | null = null;
+  let pendingPlaybackChunks: Int16Array[] = [];
   let clientSpeakingReported = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
@@ -122,6 +149,16 @@ function createTalkToFleetController() {
   const setState = (next: TalkToFleetWebState) => {
     state = next;
     for (const listener of listeners) {
+      listener();
+    }
+  };
+
+  const publishLevels = (next: TalkToFleetAudioLevels) => {
+    if (levels.input === next.input && levels.output === next.output) {
+      return;
+    }
+    levels = next;
+    for (const listener of levelListeners) {
       listener();
     }
   };
@@ -145,26 +182,22 @@ function createTalkToFleetController() {
     sendControl({ type: "playback_state", speaking, route: "Speaker" });
   };
 
+  const postPcmToPlaybackWorklet = (worklet: AudioWorkletNode, pcm: Int16Array) => {
+    worklet.port.postMessage({ type: "pcm", pcm }, [pcm.buffer]);
+  };
+
   const flushPlayback = () => {
-    for (const source of activePlaybackSources) {
+    pendingPlaybackChunks = [];
+    if (playbackWorklet) {
       try {
-        source.onended = null;
-        source.stop(0);
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- AudioWorklet MessagePorts do not accept a target origin
+        playbackWorklet.port.postMessage({ type: "flush" });
       } catch {
-        // Source may already have stopped.
-      }
-      try {
-        source.disconnect();
-      } catch {
-        // Ignore disconnect errors on already-released nodes.
+        // Ignore already-closed playback worklets.
       }
     }
-    activePlaybackSources.clear();
-    nextPlayTime = 0;
     reportSpeaking(false);
-    if (state.outputLevel !== 0) {
-      setState({ ...state, outputLevel: 0 });
-    }
+    publishLevels({ ...levels, output: 0 });
   };
 
   const teardownSocketOnly = () => {
@@ -182,8 +215,7 @@ function createTalkToFleetController() {
     }
   };
 
-  const teardownAudio = () => {
-    flushPlayback();
+  const teardownCapture = () => {
     if (captureWorklet) {
       try {
         // oxlint-disable-next-line unicorn/require-post-message-target-origin -- AudioWorklet MessagePorts do not accept a target origin
@@ -223,14 +255,52 @@ function createTalkToFleetController() {
       captureContext = null;
       void ctx.close().catch(() => {});
     }
+    publishLevels({ ...levels, input: 0 });
+  };
+
+  const teardownPlayback = () => {
+    flushPlayback();
+    if (playbackWorklet) {
+      try {
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- AudioWorklet MessagePorts do not accept a target origin
+        playbackWorklet.port.postMessage("stop");
+        playbackWorklet.port.onmessage = null;
+        playbackWorklet.port.close();
+        playbackWorklet.disconnect();
+      } catch {
+        // Ignore.
+      }
+      playbackWorklet = null;
+    }
+    if (playbackAudioEl) {
+      try {
+        playbackAudioEl.pause();
+        playbackAudioEl.srcObject = null;
+      } catch {
+        // Ignore.
+      }
+      playbackAudioEl = null;
+    }
+    if (playbackDestination) {
+      try {
+        playbackDestination.disconnect();
+      } catch {
+        // Ignore.
+      }
+      playbackDestination = null;
+    }
     if (playbackContext) {
       const ctx = playbackContext;
       playbackContext = null;
       void ctx.close().catch(() => {});
     }
-    if (state.inputLevel !== 0 || state.outputLevel !== 0) {
-      setState({ ...state, inputLevel: 0, outputLevel: 0 });
-    }
+    publishLevels({ ...levels, output: 0 });
+  };
+
+  const teardownAudio = () => {
+    teardownCapture();
+    teardownPlayback();
+    publishLevels(ZERO_LEVELS);
   };
 
   const handleServerAudioBytes = (bytes: Uint8Array) => {
@@ -241,49 +311,108 @@ function createTalkToFleetController() {
     const sampleCount = Math.floor(frame.pcm.byteLength / 2);
     if (sampleCount <= 0) return;
 
+    const view = new DataView(frame.pcm.buffer, frame.pcm.byteOffset, sampleCount * 2);
+    const pcm = new Int16Array(sampleCount);
+    for (let i = 0; i < sampleCount; i += 1) {
+      pcm[i] = view.getInt16(i * 2, true);
+    }
+
+    if (playbackWorklet) {
+      if (playbackContext?.state === "suspended") {
+        void playbackContext.resume().catch(() => {});
+      }
+      postPcmToPlaybackWorklet(playbackWorklet, pcm);
+      return;
+    }
+
+    pendingPlaybackChunks.push(pcm);
+    if (pendingPlaybackChunks.length > 250) {
+      pendingPlaybackChunks.shift();
+    }
+  };
+
+  const setupPlaybackPipeline = async (sequence: number) => {
     const ctx = playbackContext;
     if (!ctx) return;
-    if (ctx.state === "suspended") {
-      void ctx.resume().catch(() => {});
+
+    await ctx.audioWorklet.addModule(talkToFleetPlaybackWorkletUrl);
+    if (sequence !== activeRunSequence || intentionalStop || playbackContext !== ctx) {
+      return;
     }
 
-    const view = new DataView(frame.pcm.buffer, frame.pcm.byteOffset, frame.pcm.byteLength);
-    const floats = new Float32Array(sampleCount);
-    let energy = 0;
-    for (let i = 0; i < sampleCount; i += 1) {
-      const s = view.getInt16(i * 2, true) / 32_768;
-      floats[i] = s;
-      energy += s * s;
-    }
-    const rmsLevel = Math.min(1, Math.sqrt(energy / sampleCount) * 4);
+    const worklet = new AudioWorkletNode(ctx, "t3-talk-to-fleet-playback", {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    playbackWorklet = worklet;
 
-    const buffer = ctx.createBuffer(1, sampleCount, TALK_TO_FLEET_OUTPUT_SAMPLE_RATE);
-    buffer.copyToChannel(floats, 0);
-
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-
-    const now = ctx.currentTime;
-    // Leave a 40 ms jitter buffer when starting playback from idle or after an underrun.
-    const startTime = nextPlayTime <= now + 0.005 ? now + 0.04 : nextPlayTime;
-    nextPlayTime = startTime + buffer.duration;
-
-    activePlaybackSources.add(source);
-    reportSpeaking(true);
-    setState({ ...state, outputLevel: rmsLevel });
-
-    source.onended = () => {
-      activePlaybackSources.delete(source);
-      if (activePlaybackSources.size === 0) {
-        nextPlayTime = 0;
-        reportSpeaking(false);
-        if (state.outputLevel !== 0) {
-          setState({ ...state, outputLevel: 0 });
-        }
-      }
+    worklet.port.onmessage = ({
+      data,
+    }: MessageEvent<{
+      readonly type: "state";
+      readonly speaking: boolean;
+      readonly level: number;
+    }>) => {
+      if (sequence !== activeRunSequence || intentionalStop) return;
+      if (data?.type !== "state") return;
+      reportSpeaking(data.speaking);
+      publishLevels({ ...levels, output: data.level });
     };
-    source.start(startTime);
+
+    // Pipe assistant audio through a MediaStreamAudioDestinationNode -> <audio> so Chromium's
+    // WebRTC AEC3 cancels speaker playback out of the microphone capture stream on macOS.
+    let routedViaMediaStream = false;
+    if (typeof ctx.createMediaStreamDestination === "function" && typeof Audio === "function") {
+      try {
+        const destination = ctx.createMediaStreamDestination();
+        playbackDestination = destination;
+        worklet.connect(destination);
+        const audioEl = new Audio();
+        audioEl.autoplay = true;
+        audioEl.setAttribute("playsinline", "");
+        audioEl.srcObject = destination.stream;
+        playbackAudioEl = audioEl;
+        routedViaMediaStream = await audioEl
+          .play()
+          .then(() => true)
+          .catch(() => false);
+        if (!routedViaMediaStream || sequence !== activeRunSequence || intentionalStop) {
+          try {
+            worklet.disconnect(destination);
+          } catch {
+            // Ignore.
+          }
+          audioEl.pause();
+          audioEl.srcObject = null;
+          playbackAudioEl = null;
+          playbackDestination = null;
+        }
+      } catch {
+        playbackDestination = null;
+        playbackAudioEl = null;
+        routedViaMediaStream = false;
+      }
+    }
+
+    if (sequence !== activeRunSequence || intentionalStop) {
+      worklet.disconnect();
+      return;
+    }
+
+    if (!routedViaMediaStream) {
+      worklet.connect(ctx.destination);
+    }
+
+    if (ctx.state === "suspended") {
+      await ctx.resume().catch(() => {});
+    }
+
+    const queued = pendingPlaybackChunks;
+    pendingPlaybackChunks = [];
+    for (const chunk of queued) {
+      postPcmToPlaybackWorklet(worklet, chunk);
+    }
   };
 
   const scheduleReconnect = () => {
@@ -317,6 +446,7 @@ function createTalkToFleetController() {
     const resumeSessionId = state.sessionId;
     const resumeSeq = state.lastEventSeq;
     const scopedThreadId = state.scopedThreadId ?? undefined;
+    const mode = state.mode;
 
     reconnectTimer = setTimeout(() => {
       if (intentionalStop || sequence !== activeRunSequence || !resumeSessionId) return;
@@ -327,6 +457,7 @@ function createTalkToFleetController() {
           sessionId: resumeSessionId,
           lastEventSeq: resumeSeq,
           greet: false,
+          mode,
           ...(scopedThreadId ? { threadId: scopedThreadId } : {}),
         },
         sequence,
@@ -427,11 +558,14 @@ function createTalkToFleetController() {
     });
   };
 
-  const setupCapturePipeline = async (sequence: number) => {
-    const micId = await chooseRecordingMicrophone().catch(() => "");
+  const setupCapturePipeline = async (sequence: number, microphoneOverride?: string) => {
+    const chosenMic =
+      microphoneOverride !== undefined
+        ? microphoneOverride
+        : state.selectedMicrophoneId || (await chooseRecordingMicrophone().catch(() => ""));
     if (sequence !== activeRunSequence || intentionalStop) return;
 
-    const stream = await openVoiceMicrophone(micId);
+    const stream = await openVoiceMicrophone(chosenMic);
     if (sequence !== activeRunSequence || intentionalStop) {
       for (const track of stream.getTracks()) track.stop();
       return;
@@ -455,9 +589,7 @@ function createTalkToFleetController() {
     >) => {
       if (sequence !== activeRunSequence || intentionalStop) return;
       if (data.type === "level") {
-        if (state.inputLevel !== data.level) {
-          setState({ ...state, inputLevel: data.level });
-        }
+        publishLevels({ ...levels, input: data.level });
         return;
       }
       if (data.type === "pcm" && !state.muted && socket?.readyState === WebSocket.OPEN) {
@@ -506,8 +638,13 @@ function createTalkToFleetController() {
     }
   };
 
-  const start = async (environmentId: EnvironmentId, options?: { readonly threadId?: string }) => {
-    if (isTalkToFleetWebActive(state.phase) && !options?.threadId) {
+  const start = async (environmentId: EnvironmentId, options?: StartTalkToFleetWebOptions) => {
+    const requestedThreadId = options?.threadId ?? null;
+    if (
+      isTalkToFleetWebActive(state.phase) &&
+      state.environmentId === environmentId &&
+      state.scopedThreadId === requestedThreadId
+    ) {
       return;
     }
 
@@ -515,12 +652,16 @@ function createTalkToFleetController() {
     if (!prepared || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) {
       setState({
         ...state,
-        panelOpen: true,
+        panelOpen: options?.openFloatingPanel ?? !requestedThreadId,
         minimized: false,
         phase: "error",
         error: m(msg("Connect to an environment with agent access to use Talk to Fleet.")),
       });
       return;
+    }
+
+    if (isTalkToFleetWebActive(state.phase) && state.sessionId) {
+      sendControl({ type: "hangup" });
     }
 
     const sequence = ++activeRunSequence;
@@ -529,6 +670,7 @@ function createTalkToFleetController() {
     reconnectAttempt = 0;
     disconnectedAtMs = null;
 
+    cancelAllActiveVoiceInputSessions();
     teardownSocketOnly();
     teardownAudio();
 
@@ -536,31 +678,37 @@ function createTalkToFleetController() {
     playbackContext = createPlaybackAudioContext();
     void playbackContext.resume().catch(() => {});
 
+    const mode = options?.mode ?? (requestedThreadId ? "thread" : "fleet");
     setState({
       ...createInitialTalkToFleetWebState({
         showCaptions: state.showCaptions,
         selectedEnvironmentId: environmentId,
+        selectedMicrophoneId: state.selectedMicrophoneId,
       }),
-      panelOpen: true,
+      panelOpen: options?.openFloatingPanel ?? mode === "fleet",
       minimized: false,
       phase: "connecting",
       environmentId,
-      scopedThreadId: options?.threadId ?? null,
+      scopedThreadId: requestedThreadId,
+      scopedThreadTitle: options?.threadTitle ?? null,
+      mode,
     });
     writeStorageString(STORAGE_ENV_KEY, environmentId);
 
     try {
       await Promise.all([
         setupCapturePipeline(sequence),
+        setupPlaybackPipeline(sequence),
         openSocket(
           environmentId,
           {
             type: "config",
-            ...(options?.threadId ? { threadId: options.threadId } : {}),
+            ...(requestedThreadId ? { threadId: requestedThreadId } : {}),
+            mode,
             greet: true,
           },
           sequence,
-          options?.threadId,
+          requestedThreadId ?? undefined,
         ),
       ]);
     } catch (error) {
@@ -587,6 +735,7 @@ function createTalkToFleetController() {
       ...state,
       phase: "ended",
       sessionId: null,
+      scopedThreadTitle: null,
       statusDetail: null,
       error: null,
       inputLevel: 0,
@@ -594,13 +743,26 @@ function createTalkToFleetController() {
     });
   };
 
+  const interruptAssistant = () => {
+    if (!isTalkToFleetWebActive(state.phase)) return;
+    flushPlayback();
+    sendControl({ type: "interrupt_assistant" });
+    setState({
+      ...state,
+      phase: "listening",
+      statusDetail: null,
+    });
+  };
+
   const newSession = () => {
     if (!isTalkToFleetWebActive(state.phase)) {
       if (state.environmentId) {
-        void start(
-          state.environmentId,
-          state.scopedThreadId ? { threadId: state.scopedThreadId } : undefined,
-        );
+        void start(state.environmentId, {
+          ...(state.scopedThreadId ? { threadId: state.scopedThreadId } : {}),
+          ...(state.scopedThreadTitle ? { threadTitle: state.scopedThreadTitle } : {}),
+          mode: state.mode,
+          openFloatingPanel: state.panelOpen,
+        });
       }
       return;
     }
@@ -621,6 +783,9 @@ function createTalkToFleetController() {
       // oxlint-disable-next-line unicorn/require-post-message-target-origin -- AudioWorklet MessagePorts do not accept a target origin
       captureWorklet.port.postMessage(nextMuted ? "mute" : "unmute");
     }
+    if (nextMuted) {
+      publishLevels({ ...levels, input: 0 });
+    }
     setState({
       ...state,
       muted: nextMuted,
@@ -632,6 +797,29 @@ function createTalkToFleetController() {
     const nextCaptions = !state.showCaptions;
     writeStorageString(STORAGE_CAPTIONS_KEY, nextCaptions ? "1" : "0");
     setState({ ...state, showCaptions: nextCaptions });
+  };
+
+  const setMicrophoneId = async (microphoneId: string) => {
+    writeStorageString(STORAGE_MIC_KEY, microphoneId);
+    setState({ ...state, selectedMicrophoneId: microphoneId });
+    if (!isTalkToFleetWebActive(state.phase)) {
+      return;
+    }
+    const sequence = activeRunSequence;
+    teardownCapture();
+    try {
+      const resolved = microphoneId || (await chooseRecordingMicrophone().catch(() => ""));
+      await setupCapturePipeline(sequence, resolved);
+    } catch (error) {
+      if (sequence !== activeRunSequence) return;
+      setState({
+        ...state,
+        error:
+          error instanceof Error
+            ? error.message
+            : m(msg("Could not switch microphone during Talk to Fleet.")),
+      });
+    }
   };
 
   const openPanel = (environmentId?: EnvironmentId | null) => {
@@ -697,12 +885,21 @@ function createTalkToFleetController() {
       };
     },
     getSnapshot: () => state,
+    subscribeLevels: (listener: () => void) => {
+      levelListeners.add(listener);
+      return () => {
+        levelListeners.delete(listener);
+      };
+    },
+    getLevels: () => levels,
     openPanel,
     closePanel,
     toggleMinimize,
     setSelectedEnvironmentId,
+    setMicrophoneId,
     start,
     stop,
+    interruptAssistant,
     newSession,
     toggleMute,
     toggleCaptions,
@@ -716,9 +913,49 @@ export function useTalkToFleetState(): TalkToFleetWebState {
   return useSyncExternalStore(talkToFleetController.subscribe, talkToFleetController.getSnapshot);
 }
 
+export function useTalkToFleetLevels(): TalkToFleetAudioLevels {
+  return useSyncExternalStore(
+    talkToFleetController.subscribeLevels,
+    talkToFleetController.getLevels,
+  );
+}
+
 const getTalkToFleetActiveSnapshot = (): boolean =>
   isTalkToFleetWebActive(talkToFleetController.getSnapshot().phase);
 
 export function useTalkToFleetActive(): boolean {
   return useSyncExternalStore(talkToFleetController.subscribe, getTalkToFleetActiveSnapshot);
+}
+
+const visibleVoicePanes = new Map<string, number>();
+const visibleVoicePaneListeners = new Set<() => void>();
+
+export function registerVisibleVoicePane(threadId: string): () => void {
+  visibleVoicePanes.set(threadId, (visibleVoicePanes.get(threadId) ?? 0) + 1);
+  for (const listener of visibleVoicePaneListeners) {
+    listener();
+  }
+  return () => {
+    const next = (visibleVoicePanes.get(threadId) ?? 1) - 1;
+    if (next > 0) {
+      visibleVoicePanes.set(threadId, next);
+    } else {
+      visibleVoicePanes.delete(threadId);
+    }
+    for (const listener of visibleVoicePaneListeners) {
+      listener();
+    }
+  };
+}
+
+function subscribeVisibleVoicePanes(listener: () => void): () => void {
+  visibleVoicePaneListeners.add(listener);
+  return () => visibleVoicePaneListeners.delete(listener);
+}
+
+export function useIsVoicePaneVisible(threadId: string | null): boolean {
+  return useSyncExternalStore(
+    subscribeVisibleVoicePanes,
+    () => threadId !== null && visibleVoicePanes.has(threadId),
+  );
 }

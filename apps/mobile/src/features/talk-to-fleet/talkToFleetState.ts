@@ -22,6 +22,7 @@ export interface TalkToFleetState {
   readonly phase: TalkToFleetClientPhase;
   readonly environmentId: EnvironmentId | null;
   readonly scopedThreadId: string | null;
+  readonly scopedThreadTitle: string | null;
   readonly sessionId: string | null;
   readonly lastEventSeq: number;
   readonly provider: string | null;
@@ -46,6 +47,7 @@ export function createInitialTalkToFleetState(options?: {
     phase: "idle",
     environmentId: null,
     scopedThreadId: null,
+    scopedThreadTitle: null,
     sessionId: null,
     lastEventSeq: 0,
     provider: null,
@@ -119,6 +121,8 @@ export function reduceTalkToFleetEvent(
         ...state,
         lastEventSeq,
         sessionId: event.sessionId,
+        scopedThreadId: event.scopedThreadId ?? state.scopedThreadId,
+        scopedThreadTitle: event.scopedThreadTitle ?? state.scopedThreadTitle,
         provider: event.provider,
         model: event.model,
         contextBuiltAt: event.contextBuiltAt,
@@ -177,6 +181,7 @@ export function reduceTalkToFleetEvent(
         lastEventSeq,
         phase: "ended",
         sessionId: null,
+        scopedThreadTitle: null,
         statusDetail: null,
       };
   }

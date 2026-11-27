@@ -11,12 +11,17 @@ describe("reduceTalkToFleetWebEvent", () => {
       type: "ready",
       seq: 1,
       sessionId: "sess-1",
+      scopedThreadId: "thread-7",
+      scopedThreadTitle: "Voice Sidechat",
       provider: "phonic",
       model: "phonic-1",
       contextBuiltAt: "2026-11-26T16:00:00.000Z",
       degradedSources: ["mail"],
     });
     expect(state.sessionId).toBe("sess-1");
+    expect(state.scopedThreadId).toBe("thread-7");
+    expect(state.scopedThreadTitle).toBe("Voice Sidechat");
+    expect(state.mode).toBe("thread");
     expect(state.degradedSources).toEqual(["mail"]);
 
     state = reduceTalkToFleetWebEvent(state, {
@@ -87,5 +92,26 @@ describe("reduceTalkToFleetWebEvent", () => {
     expect(state.activeTurnId).toBe(4);
     expect(state.phase).toBe("listening");
     expect(state.outputLevel).toBe(0);
+
+    state = reduceTalkToFleetWebEvent(state, {
+      type: "transcript",
+      seq: 8,
+      id: "t-1",
+      speaker: "fleet",
+      delta: "Hey Nick — updated.",
+      replace: true,
+    });
+    expect(state.transcript).toEqual([
+      { id: "t-1", speaker: "fleet", text: "Hey Nick — updated." },
+    ]);
+
+    state = reduceTalkToFleetWebEvent(state, {
+      type: "session_ended",
+      seq: 9,
+      reason: "hangup",
+    });
+    expect(state.phase).toBe("ended");
+    expect(state.sessionId).toBeNull();
+    expect(state.scopedThreadTitle).toBeNull();
   });
 });

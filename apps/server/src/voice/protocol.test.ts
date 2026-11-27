@@ -50,12 +50,43 @@ describe("TalkToFleet binary audio framing", () => {
     const decodeServer = Schema.decodeUnknownSync(TalkToFleetServerEvent);
 
     expect(
-      decodeClient({ type: "config", sessionId: "sess-1", lastEventSeq: 4, greet: false }),
+      decodeClient({
+        type: "config",
+        sessionId: "sess-1",
+        lastEventSeq: 4,
+        threadId: "thread-9",
+        mode: "thread",
+        greet: false,
+      }),
     ).toEqual({
       type: "config",
       sessionId: "sess-1",
       lastEventSeq: 4,
+      threadId: "thread-9",
+      mode: "thread",
       greet: false,
+    });
+
+    expect(decodeClient({ type: "interrupt_assistant" })).toEqual({
+      type: "interrupt_assistant",
+    });
+
+    expect(
+      decodeServer({
+        type: "ready",
+        seq: 1,
+        sessionId: "sess-1",
+        provider: "phonic",
+        model: "phonic-1",
+        scopedThreadId: "thread-9",
+        scopedThreadTitle: "Refactor voice engine",
+        contextBuiltAt: "2026-11-27T14:00:00.000Z",
+        degradedSources: [],
+      }),
+    ).toMatchObject({
+      type: "ready",
+      scopedThreadId: "thread-9",
+      scopedThreadTitle: "Refactor voice engine",
     });
 
     expect(

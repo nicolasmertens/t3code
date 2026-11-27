@@ -13,6 +13,7 @@ interface NativeVoiceCallModule {
   stop(): void;
   setMuted(muted: boolean): void;
   setSpeaker(speaker: boolean): void;
+  interruptPlayback(): void;
   sendControl(json: string): void;
   addListener(
     event: "onState",
@@ -50,6 +51,7 @@ export function getVoiceCallNativeBridge(): VoiceCallNativeBridge {
       stop() {},
       setMuted() {},
       setSpeaker() {},
+      interruptPlayback() {},
       sendControl() {},
       addListener() {
         return { remove() {} };
@@ -63,6 +65,11 @@ export function getVoiceCallNativeBridge(): VoiceCallNativeBridge {
     stop: () => native.stop(),
     setMuted: (muted) => native.setMuted(muted),
     setSpeaker: (speaker) => native.setSpeaker(speaker),
+    interruptPlayback: () => {
+      if (typeof native.interruptPlayback === "function") {
+        native.interruptPlayback();
+      }
+    },
     sendControl: (json) => native.sendControl(json),
     addListener: ((event: string, listener: (payload: never) => void) =>
       (

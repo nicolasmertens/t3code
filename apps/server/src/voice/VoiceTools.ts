@@ -9,6 +9,7 @@ import * as NodeUtil from "node:util";
 import {
   CommandId,
   MessageId,
+  type OrchestrationV2ThreadProjection,
   RuntimeRequestId,
   type TalkToFleetCard,
   ThreadId,
@@ -27,6 +28,7 @@ import type * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import type { VoiceToolDefinition } from "./RealtimeVoiceProvider.ts";
 import {
+  formatNyDate,
   formatNyTime,
   type LiveBrowneSnapshot,
   type LiveBrowneThreadDigest,
@@ -36,6 +38,23 @@ import {
 const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
 const SSH_TOOL_TIMEOUT_MS = 6_000;
 const DEFAULT_WIKI_DIR = NodePath.join(NodeOS.homedir(), "wiki");
+const FLEET_VOICE_DIR_MAC = "/Users/nico/system-architecture/services/fleet-voice";
+
+const CURRENT_THREAD_ALIASES = new Set([
+  "this",
+  "current",
+  "main",
+  "this thread",
+  "current thread",
+  "main session",
+  "main thread",
+  "deze",
+  "deze thread",
+  "deze sessie",
+  "huidige",
+  "huidige sessie",
+  "huidige thread",
+]);
 
 export interface VoiceExecResult {
   readonly ok: boolean;
@@ -72,6 +91,7 @@ export interface ExecuteVoiceToolInput {
   readonly callId: string;
   readonly name: string;
   readonly args: Readonly<Record<string, unknown>>;
+  readonly scopedThreadId?: string | undefined;
   readonly emitCard: (card: TalkToFleetCard) => void;
   readonly trackThread: (threadId: string, title?: string) => void;
 }
@@ -80,7 +100,7 @@ export const VOICE_TOOL_DEFINITIONS: ReadonlyArray<VoiceToolDefinition> = [
   {
     name: "browne_threads",
     description:
-      "Inspect, steer/message, or start Browne coding/agent threads. Use 'list' to see recent/attention threads, 'read' for recent messages, 'send' to message an existing thread, or 'create' to start a new thread in a project.",
+      "Inspect, steer/message, or start Browne coding/agent threads. When a main session is open beside this voice chat, omitting 'thread_id' and 'title' for 'read' or 'send' automatically targets that main session.",
     parameters: {
       properties: {
         action: {
@@ -90,7 +110,8 @@ export const VOICE_TOOL_DEFINITIONS: ReadonlyArray<VoiceToolDefinition> = [
         },
         thread_id: {
           type: "string",
-          description: "Target Browne thread ID for read or send (optional if title is given).",
+          description:
+            "Target Browne thread ID for read or send (optional when scoped to main session or if title is given).",
         },
         project_name: {
           type: "string",
@@ -125,7 +146,8 @@ export const VOICE_TOOL_DEFINITIONS: ReadonlyArray<VoiceToolDefinition> = [
         },
         thread_id: {
           type: "string",
-          description: "Thread ID with the pending request.",
+          description:
+            "Thread ID with the pending request (optional when responding to the scoped main session).",
         },
         request_id: {
           type: "string",
@@ -144,17 +166,34 @@ export const VOICE_TOOL_DEFINITIONS: ReadonlyArray<VoiceToolDefinition> = [
   {
     name: "fleet_search",
     description:
-      "Live search across Fleet sources when the preloaded briefing is insufficient: local '~/wiki', MaxBook Postroom email ('mail'), or journal life-planner ('plan').",
+      "Live search across Fleet sources when the preloaded briefing is insufficient: 'all', 'wiki', 'mail', 'plan', 'messages' (WhatsApp & iMessage), 'calendar', 'meetings' (Mac meeting transcripts & screen), 'calls', 'contacts', 'notes', or 'screen'.",
     parameters: {
       properties: {
         source: {
           type: "string",
-          enum: ["wiki", "mail", "plan"],
-          description: "Knowledge or state source to query.",
+          enum: [
+            "all",
+            "wiki",
+            "mail",
+            "plan",
+            "messages",
+            "calendar",
+            "meetings",
+            "calls",
+            "contacts",
+            "notes",
+            "screen",
+          ],
+          description: "Knowledge or live personal source to query.",
         },
         query: {
           type: "string",
           description: "Search keywords or phrase.",
+        },
+        since: {
+          type: "string",
+          description:
+            "Optional time window filter (e.g. 'today', 'gisteren', 'last 2 weeks', '2026-11-20').",
         },
         limit: {
           type: "integer",
@@ -302,10 +341,10 @@ function summarizeToolTitle(name: string, args: Readonly<Record<string, unknown>
         return `New thread: ${asNonEmptyString(args.title) ?? asNonEmptyString(args.project_name) ?? "task"}`;
       }
       if (action === "send") {
-        return `Message thread ${asNonEmptyString(args.title) ?? asNonEmptyString(args.thread_id) ?? ""}`.trim();
+        return `Message thread ${asNonEmptyString(args.title) ?? asNonEmptyString(args.thread_id) ?? "main session"}`.trim();
       }
       if (action === "read") {
-        return `Read thread ${asNonEmptyString(args.title) ?? asNonEmptyString(args.thread_id) ?? ""}`.trim();
+        return `Read thread ${asNonEmptyString(args.title) ?? asNonEmptyString(args.thread_id) ?? "main session"}`.trim();
       }
       return "Check Browne threads";
     }
@@ -331,6 +370,83 @@ function summarizeToolTitle(name: string, args: Readonly<Record<string, unknown>
 
 function isoFromDateTime(dt: DateTime.Utc): string {
   return new Date(DateTime.toEpochMillis(dt)).toISOString();
+}
+
+function summarizeProjectionActivity(
+  projection: OrchestrationV2ThreadProjection,
+  limit = 10,
+): string[] {
+  const summaries: string[] = [];
+  const rawItems = projection.visibleTurnItems ?? projection.turnItems ?? [];
+  for (const entry of rawItems) {
+    const item = "item" in entry ? entry.item : entry;
+    if (!item || typeof item !== "object" || !("type" in item)) continue;
+    switch (item.type) {
+      case "command_execution": {
+        const exit = typeof item.exitCode === "number" ? ` (exit ${item.exitCode})` : "";
+        summaries.push(`cmd${exit}: ${item.input.replace(/\s+/gu, " ").trim().slice(0, 140)}`);
+        break;
+      }
+      case "file_change":
+        summaries.push(`edit: ${item.fileName}`);
+        break;
+      case "dynamic_tool":
+        summaries.push(`tool: ${item.toolName ?? "custom"}`);
+        break;
+      case "subagent": {
+        const prompt = item.prompt.replace(/\s+/gu, " ").trim().slice(0, 100);
+        summaries.push(`subagent: ${prompt}`);
+        break;
+      }
+      case "proposed_plan":
+        summaries.push(`plan: ${item.markdown.replace(/\s+/gu, " ").trim().slice(0, 120)}`);
+        break;
+      case "error":
+        summaries.push(`error: ${item.failure.message.slice(0, 120)}`);
+        break;
+      case "approval_request":
+        summaries.push(
+          `approval (${item.requestKind}): ${(item.prompt ?? item.reason ?? "").slice(0, 100)}`,
+        );
+        break;
+      case "user_input_request":
+        summaries.push(`question: ${item.questions[0]?.question.slice(0, 100) ?? "pending"}`);
+        break;
+      default:
+        break;
+    }
+  }
+  return summaries.slice(-limit);
+}
+
+export function extractBoostedKeywordsFromSnapshot(live: LiveBrowneSnapshot): string[] {
+  const keywords: string[] = [];
+  const seen = new Set<string>();
+  const addTerm = (raw: string) => {
+    const trimmed = raw.trim().replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/gu, "");
+    if (trimmed.length < 3 || trimmed.length > 32) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    keywords.push(trimmed);
+  };
+  const addPhraseAndWords = (text: string) => {
+    addTerm(text);
+    for (const token of text.split(/[\s/:.,()[\]]+/u)) {
+      addTerm(token);
+    }
+  };
+
+  for (const project of live.projects) {
+    addPhraseAndWords(project);
+  }
+  if (live.scopedThread) {
+    addPhraseAndWords(live.scopedThread.title);
+  }
+  for (const thread of live.activeThreads.slice(0, 6)) {
+    addPhraseAndWords(thread.title);
+  }
+  return keywords.slice(0, 25);
 }
 
 export const readLiveBrowneSnapshot = Effect.fn("voice.readLiveBrowneSnapshot")(function* (
@@ -379,6 +495,7 @@ export const readLiveBrowneSnapshot = Effect.fn("voice.readLiveBrowneSnapshot")(
   let scopedThread: LiveBrowneSnapshot["scopedThread"] | undefined;
   const trimmedScopedId = scopedThreadId?.trim();
   if (trimmedScopedId) {
+    const shell = snapshot.threads.find((t) => t.id === trimmedScopedId);
     const projection = yield* deps.orchestrator
       .getThreadProjection(ThreadId.make(trimmedScopedId))
       .pipe(Effect.orElseSucceed(() => null));
@@ -387,9 +504,16 @@ export const readLiveBrowneSnapshot = Effect.fn("voice.readLiveBrowneSnapshot")(
         id: projection.thread.id,
         title: projection.thread.title,
         projectTitle: projectById.get(projection.thread.projectId) ?? "No project",
+        status: shell?.status ?? "idle",
+        branch: projection.thread.branch,
+        worktreePath: projection.thread.worktreePath,
+        pendingRequests: projection.runtimeRequests
+          .filter((req) => req.status === "pending")
+          .map((req) => ({ id: req.id, kind: req.kind })),
+        recentActivity: summarizeProjectionActivity(projection, 10),
         recentMessages: projection.messages
           .filter((msg) => msg.text.trim().length > 0)
-          .slice(-6)
+          .slice(-16)
           .map((msg) => ({ role: msg.role, text: msg.text })),
       };
     }
@@ -497,16 +621,22 @@ async function searchMaxbookMail(
   exec: NonNullable<VoiceToolsDeps["execCommand"]>,
   query: string,
   limit: number,
+  since?: string,
 ): Promise<VoiceToolExecutionResult> {
   const fetchedAt = formatNyTime();
-  const res = await exec("ssh", [
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=4",
-    "maxbook",
-    `~/dev/40-bin/postroom-search --json --limit ${limit} ${shellQuote(query)}`,
-  ]);
+  const trimmedQuery = query.trim();
+  const sinceArg =
+    since && /^\d{4}-\d{2}-\d{2}$/u.test(since.trim())
+      ? `--since ${since.trim()}`
+      : trimmedQuery.length === 0
+        ? `--since ${formatNyDate(new Date(Date.now() - 7 * 86_400_000))}`
+        : "";
+  const queryArg = trimmedQuery.length > 0 ? shellQuote(trimmedQuery) : "";
+  const cmd = ["~/dev/40-bin/postroom-search --json", `--limit ${limit}`, sinceArg, queryArg]
+    .filter((part) => part.length > 0)
+    .join(" ");
+
+  const res = await exec("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "maxbook", cmd]);
   if (!res.ok || !res.stdout.trim().startsWith("{")) {
     return {
       ok: false,
@@ -532,6 +662,91 @@ async function searchMaxbookMail(
       ok: false,
       sourceAge: fetchedAt,
       error: "Postroom returned invalid JSON.",
+    };
+  }
+}
+
+function mapOwnerSearchSource(source: string): string {
+  switch (source) {
+    case "all":
+      return "";
+    case "messages":
+      return "messages";
+    case "calendar":
+      return "calendar";
+    case "meetings":
+      return "meetings";
+    case "calls":
+      return "calls";
+    case "contacts":
+      return "contacts";
+    case "notes":
+      return "notes";
+    case "screen":
+      return "screen";
+    default:
+      return source;
+  }
+}
+
+async function searchOwnerFleet(
+  exec: NonNullable<VoiceToolsDeps["execCommand"]>,
+  input: {
+    readonly query: string;
+    readonly source: string;
+    readonly since?: string;
+    readonly limit: number;
+  },
+): Promise<VoiceToolExecutionResult> {
+  const fetchedAt = formatNyTime();
+  const payload = Buffer.from(
+    JSON.stringify({
+      query: input.query,
+      source: mapOwnerSearchSource(input.source),
+      since: input.since ?? null,
+      limit: input.limit,
+    }),
+    "utf8",
+  ).toString("base64");
+  const script = Buffer.from(
+    [
+      "import asyncio, base64, json, os, sys",
+      `sys.path.insert(0, ${JSON.stringify(FLEET_VOICE_DIR_MAC)})`,
+      "import owner_search",
+      "args = json.loads(base64.b64decode(os.environ['VOICE_SEARCH_ARGS']).decode())",
+      "res = asyncio.run(owner_search.fleet_search(args['query'], since=args['since'], source=args['source'], limit=args['limit']))",
+      "print(json.dumps(res, ensure_ascii=False))",
+    ].join("\n"),
+    "utf8",
+  ).toString("base64");
+
+  const res = await exec("ssh", [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=4",
+    "maxbook",
+    `VOICE_SEARCH_ARGS=${shellQuote(payload)} python3 -c 'import base64; exec(base64.b64decode("${script}").decode())'`,
+  ]);
+  if (!res.ok || !res.stdout.trim().startsWith("{")) {
+    return {
+      ok: false,
+      sourceAge: fetchedAt,
+      error: `MaxBook offline or Fleet search unreachable (${res.stderr.slice(0, 100) || "no response"}).`,
+    };
+  }
+  try {
+    const parsed = JSON.parse(res.stdout) as Record<string, unknown>;
+    return {
+      ok: true,
+      sourceAge: fetchedAt,
+      data: parsed,
+    };
+  } catch {
+    return {
+      ok: false,
+      sourceAge: fetchedAt,
+      error: "Fleet search returned invalid JSON.",
     };
   }
 }
@@ -648,7 +863,7 @@ const resolveLaunchProjectAndModel = Effect.fn("voice.resolveLaunchProjectAndMod
 export function executeVoiceTool(
   input: ExecuteVoiceToolInput,
 ): Effect.Effect<VoiceToolExecutionResult> {
-  const { deps, callId, name, args, emitCard, trackThread } = input;
+  const { deps, callId, name, args, scopedThreadId, emitCard, trackThread } = input;
   const cardId = `tool:${callId}`;
   const title = summarizeToolTitle(name, args);
   const exec = deps.execCommand ?? defaultExecCommand;
@@ -757,15 +972,20 @@ export function executeVoiceTool(
             };
           }
 
-          // Resolve threadId either directly or by title search.
+          // Resolve threadId directly, by title search, or default to scoped main session.
           const rawThreadId = asNonEmptyString(args.thread_id);
           const rawHint = asNonEmptyString(args.title);
+          const effectiveThreadId =
+            rawThreadId ??
+            (scopedThreadId && (!rawHint || CURRENT_THREAD_ALIASES.has(rawHint.toLowerCase()))
+              ? scopedThreadId
+              : undefined);
           const [snapshot, projects] = yield* Effect.all([
             deps.orchestrator.getShellSnapshot(),
             deps.projectStore.listShells(),
           ]);
-          const targetShell = rawThreadId
-            ? snapshot.threads.find((t) => t.id === rawThreadId)
+          const targetShell = effectiveThreadId
+            ? snapshot.threads.find((t) => t.id === effectiveThreadId)
             : rawHint
               ? snapshot.threads.find((t) => t.title.toLowerCase().includes(rawHint.toLowerCase()))
               : undefined;
@@ -773,8 +993,8 @@ export function executeVoiceTool(
           if (!targetShell) {
             return {
               ok: false,
-              error: rawThreadId
-                ? `Thread ${rawThreadId} not found.`
+              error: effectiveThreadId
+                ? `Thread ${effectiveThreadId} not found.`
                 : "Specify a matching thread_id or thread title.",
             };
           }
@@ -793,15 +1013,18 @@ export function executeVoiceTool(
                 title: projection.thread.title,
                 projectTitle,
                 status: targetShell.status,
+                branch: projection.thread.branch,
+                worktreePath: projection.thread.worktreePath,
                 pendingRequests: projection.runtimeRequests
                   .filter((req) => req.status === "pending")
                   .map((req) => ({ requestId: req.id, kind: req.kind })),
+                recentActivity: summarizeProjectionActivity(projection, 10),
                 recentMessages: projection.messages
                   .filter((msg) => msg.text.trim().length > 0)
-                  .slice(-8)
+                  .slice(-16)
                   .map((msg) => ({
                     role: msg.role,
-                    text: msg.text.slice(0, 500),
+                    text: msg.text.slice(0, 1_000),
                   })),
               },
             };
@@ -887,7 +1110,7 @@ export function executeVoiceTool(
           }
 
           if (action === "respond") {
-            const rawThreadId = asNonEmptyString(args.thread_id);
+            const rawThreadId = asNonEmptyString(args.thread_id) ?? scopedThreadId;
             const decision = asNonEmptyString(args.decision);
             if (!rawThreadId || (decision !== "accept" && decision !== "decline")) {
               return {
@@ -932,8 +1155,9 @@ export function executeVoiceTool(
         }
 
         case "fleet_search": {
-          const source = asNonEmptyString(args.source);
+          const source = asNonEmptyString(args.source) ?? "all";
           const query = asNonEmptyString(args.query) ?? "";
+          const since = asNonEmptyString(args.since);
           const limit = asPositiveLimit(args.limit, 5, 15);
           if (source === "wiki") {
             return yield* Effect.promise(() =>
@@ -941,12 +1165,55 @@ export function executeVoiceTool(
             );
           }
           if (source === "mail") {
-            return yield* Effect.promise(() => searchMaxbookMail(exec, query, limit));
+            return yield* Effect.promise(() => searchMaxbookMail(exec, query, limit, since));
           }
           if (source === "plan") {
             return yield* Effect.promise(() => readFreshPlan(exec, query));
           }
-          return { ok: false, error: `Unsupported search source '${source ?? ""}'.` };
+          if (source === "all") {
+            const [remote, wiki] = yield* Effect.promise(() =>
+              Promise.all([
+                searchOwnerFleet(exec, {
+                  query,
+                  source: "all",
+                  ...(since ? { since } : {}),
+                  limit,
+                }),
+                query.length > 0
+                  ? searchLocalWiki(deps.wikiDir ?? DEFAULT_WIKI_DIR, query, Math.min(limit, 5))
+                  : Promise.resolve({
+                      ok: true,
+                      data: { matches: [] },
+                    } as VoiceToolExecutionResult),
+              ]),
+            );
+            if (!remote.ok && !wiki.ok) {
+              return remote;
+            }
+            return {
+              ok: true,
+              sourceAge: formatNyTime(),
+              data: {
+                query,
+                fleet: remote.ok ? remote.data : { error: remote.error },
+                wiki: wiki.ok ? wiki.data : { error: wiki.error },
+              },
+            };
+          }
+          if (
+            source === "messages" ||
+            source === "calendar" ||
+            source === "meetings" ||
+            source === "calls" ||
+            source === "contacts" ||
+            source === "notes" ||
+            source === "screen"
+          ) {
+            return yield* Effect.promise(() =>
+              searchOwnerFleet(exec, { query, source, ...(since ? { since } : {}), limit }),
+            );
+          }
+          return { ok: false, error: `Unsupported search source '${source}'.` };
         }
 
         case "fleet_plan": {

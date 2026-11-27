@@ -408,6 +408,8 @@ export interface ChatComposerProps {
   sideChatAvailable?: boolean;
   sideChatDisabledReason?: string | null;
   xResearchSideChatDisabledReason?: string | null;
+  onTalkCommand?: (() => void) | undefined;
+  voiceSidechatDisabledReason?: string | null;
   /** Arms a fresh session for the next message; absent where `/clear` is unavailable. */
   onFreshSession?: (() => void) | undefined;
   environmentUnavailable: {
@@ -1231,6 +1233,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     sideChatAvailable: props.sideChatAvailable === true,
     sideChatDisabledReason: props.sideChatDisabledReason ?? null,
     xResearchSideChatDisabledReason: props.xResearchSideChatDisabledReason ?? null,
+    voiceSidechatAvailable:
+      props.onTalkCommand !== undefined || (props.voiceSidechatDisabledReason ?? null) !== null,
+    voiceSidechatDisabledReason: props.voiceSidechatDisabledReason ?? null,
     freshSessionAvailable: props.onFreshSession !== undefined,
     compactSlashCommandAvailable,
     selectedProvider,
@@ -2107,6 +2112,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }
         return;
       }
+      if (item.command === "talk") {
+        if (props.voiceSidechatDisabledReason) return;
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          focusEditorAfterReplace: false,
+        });
+        if (applied) {
+          setComposerHighlightedItemId(null);
+          props.onTalkCommand?.();
+        }
+        return;
+      }
       if (item.command === "side" || item.command === "btw" || item.command === "x") {
         const disabledReason =
           item.command === "x"
@@ -2761,6 +2778,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerEnvironmentContexts.length === 0 &&
       replyTo === null,
     sideChat: props.sideChatAvailable === true || (props.sideChatDisabledReason ?? null) !== null,
+    voiceChat:
+      props.onTalkCommand !== undefined && (props.voiceSidechatDisabledReason ?? null) === null,
     usageLimits: props.onUsageLimitsCommand !== undefined,
     codexFeedback: selectedProvider === "codex" && multipleModelSelections === null,
     freshSession: props.onFreshSession !== undefined,

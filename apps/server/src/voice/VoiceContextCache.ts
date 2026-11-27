@@ -18,6 +18,8 @@ const CACHE_REFRESH_INTERVAL = Duration.seconds(120);
 const SSH_TIMEOUT_MS = 3_500;
 const WIKI_DIR_DEFAULT = NodePath.join(NodeOS.homedir(), "wiki");
 const MAX_BRIEFING_BYTES = 26_000;
+const ACTIVE_CONTEXT_SNAPSHOT_PATH =
+  "/Users/nico/system-architecture/services/fleet-voice/active-context/snapshot.json";
 
 export interface CachedExternalSourceStatus {
   readonly status: "ok" | "offline" | "empty";
@@ -31,6 +33,8 @@ export interface CachedExternalSnapshot {
   readonly planStatus: CachedExternalSourceStatus;
   readonly mailSummary: string;
   readonly mailStatus: CachedExternalSourceStatus;
+  readonly fleetDigest: string;
+  readonly fleetStatus: CachedExternalSourceStatus;
   readonly wikiSummary: string;
   readonly wikiStatus: CachedExternalSourceStatus;
 }
@@ -44,16 +48,23 @@ export interface LiveBrowneThreadDigest {
   readonly updatedAt: string;
 }
 
+export interface LiveBrowneScopedThread {
+  readonly id: string;
+  readonly title: string;
+  readonly projectTitle: string;
+  readonly status: string;
+  readonly branch?: string | null;
+  readonly worktreePath?: string | null;
+  readonly pendingRequests: ReadonlyArray<{ readonly id: string; readonly kind: string }>;
+  readonly recentActivity: ReadonlyArray<string>;
+  readonly recentMessages: ReadonlyArray<{ readonly role: string; readonly text: string }>;
+}
+
 export interface LiveBrowneSnapshot {
   readonly projects: ReadonlyArray<string>;
   readonly attentionThreads: ReadonlyArray<LiveBrowneThreadDigest>;
   readonly activeThreads: ReadonlyArray<LiveBrowneThreadDigest>;
-  readonly scopedThread?: {
-    readonly id: string;
-    readonly title: string;
-    readonly projectTitle: string;
-    readonly recentMessages: ReadonlyArray<{ readonly role: string; readonly text: string }>;
-  };
+  readonly scopedThread?: LiveBrowneScopedThread;
 }
 
 export interface VoiceBriefingResult {
@@ -94,6 +105,11 @@ interface PostroomSearchResultShape {
   }>;
 }
 
+interface ActiveFleetDigestPayload {
+  readonly builtAt?: string;
+  readonly lines?: ReadonlyArray<string>;
+}
+
 export function formatNyTime(date: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
@@ -105,6 +121,19 @@ export function formatNyTime(date: Date = new Date()): string {
     minute: "2-digit",
     hour12: false,
   }).format(date);
+}
+
+export function formatNyDate(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((p) => p.type === "year")?.value ?? "1970";
+  const month = parts.find((p) => p.type === "month")?.value ?? "01";
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+  return `${year}-${month}-${day}`;
 }
 
 async function execLimited(
@@ -227,20 +256,22 @@ export async function fetchPlanDigest(
 
 export async function fetchMailDigest(
   runExec = execLimited,
+  now = new Date(),
 ): Promise<{ readonly summary: string; readonly status: CachedExternalSourceStatus }> {
-  const fetchedAt = formatNyTime();
+  const fetchedAt = formatNyTime(now);
+  const sinceDate = formatNyDate(new Date(now.getTime() - 7 * 86_400_000));
   const res = await runExec("ssh", [
     "-o",
     "BatchMode=yes",
     "-o",
     "ConnectTimeout=3",
     "maxbook",
-    "~/dev/40-bin/postroom-search --json --limit 15 ''",
+    `~/dev/40-bin/postroom-search --json --since ${sinceDate} --limit 15`,
   ]);
   if (!res.ok || !res.stdout.trim().startsWith("{")) {
     return {
       summary: "Postroom mail unavailable (maxbook offline or asleep).",
-      status: { status: "offline", fetchedAt, detail: "maxbook offline" },
+      status: { status: "offline", fetchedAt, detail: "postroom offline" },
     };
   }
   try {
@@ -266,6 +297,75 @@ export async function fetchMailDigest(
   } catch {
     return {
       summary: "Postroom mail unreadable (parse failure).",
+      status: { status: "offline", fetchedAt, detail: "parse error" },
+    };
+  }
+}
+
+const ACTIVE_FLEET_PYTHON_SCRIPT = [
+  "import json, pathlib",
+  `p = pathlib.Path(${JSON.stringify(ACTIVE_CONTEXT_SNAPSHOT_PATH)})`,
+  "d = json.loads(p.read_text()) if p.is_file() else {}",
+  "recs = d.get('records') or []",
+  "order = ['calendars','calendar_event','whatsapp','imessage','call','chief-briefs','agent-runs','apple-note','agent-memory','fleet-state']",
+  "picked = []",
+  "seen = set()",
+  "for src in order:",
+  "    bucket = [r for r in recs if r.get('source') == src]",
+  "    bucket.sort(key=lambda r: str(r.get('at') or ''), reverse=True)",
+  "    for r in bucket[:3]:",
+  "        key = (r.get('source'), r.get('id') or r.get('ref') or r.get('title'))",
+  "        if key in seen: continue",
+  "        seen.add(key)",
+  "        at = str(r.get('at') or '')[:16].replace('T', ' ')",
+  "        title = ' '.join(str(r.get('title') or '').split())[:90]",
+  "        body = ' '.join(str(r.get('excerpt') or r.get('text') or '').split())[:160]",
+  "        picked.append(f'- [{src} {at or \"recent\"}] {title}: {body}'.strip())",
+  "        if len(picked) >= 22: break",
+  "    if len(picked) >= 22: break",
+  "print(json.dumps({'builtAt': d.get('built_at'), 'lines': picked}))",
+].join("\n");
+
+export async function fetchActiveFleetDigest(
+  runExec = execLimited,
+): Promise<{ readonly summary: string; readonly status: CachedExternalSourceStatus }> {
+  const fetchedAt = formatNyTime();
+  const b64 = Buffer.from(ACTIVE_FLEET_PYTHON_SCRIPT, "utf8").toString("base64");
+  const res = await runExec("ssh", [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=3",
+    "maxbook",
+    `python3 -c 'import base64; exec(base64.b64decode("${b64}").decode())'`,
+  ]);
+  if (!res.ok || !res.stdout.trim().startsWith("{")) {
+    return {
+      summary: "Active Fleet context unavailable (maxbook offline or snapshot missing).",
+      status: {
+        status: "offline",
+        fetchedAt,
+        detail: res.stderr.trim().slice(0, 120) || "fleet-context offline",
+      },
+    };
+  }
+  try {
+    const parsed = JSON.parse(res.stdout) as ActiveFleetDigestPayload;
+    const lines = (parsed.lines ?? []).filter((line) => line.trim().length > 0);
+    if (lines.length === 0) {
+      return {
+        summary: "No active Fleet context records available.",
+        status: { status: "empty", fetchedAt },
+      };
+    }
+    const header = parsed.builtAt ? `Snapshot built_at: ${parsed.builtAt}\n` : "";
+    return {
+      summary: `${header}${lines.join("\n")}`,
+      status: { status: "ok", fetchedAt },
+    };
+  } catch {
+    return {
+      summary: "Active Fleet context unreadable (parse failure).",
       status: { status: "offline", fetchedAt, detail: "parse error" },
     };
   }
@@ -319,7 +419,14 @@ export function buildVoiceBriefing(input: {
   const nowStr = formatNyTime(input.now);
   const degradedSources: string[] = [];
   if (input.external.planStatus.status === "offline") degradedSources.push("journal");
-  if (input.external.mailStatus.status === "offline") degradedSources.push("maxbook");
+  const mailOffline = input.external.mailStatus.status === "offline";
+  const fleetOffline = input.external.fleetStatus.status === "offline";
+  if (mailOffline && fleetOffline) {
+    degradedSources.push("maxbook");
+  } else {
+    if (mailOffline) degradedSources.push("postroom");
+    if (fleetOffline) degradedSources.push("fleet-context");
+  }
   if (input.external.wikiStatus.status === "offline") degradedSources.push("wiki");
 
   const parts: string[] = [];
@@ -328,6 +435,44 @@ export function buildVoiceBriefing(input: {
     parts.push(
       `Degraded offline sources: ${degradedSources.join(", ")}. Never guess data from them.`,
     );
+  }
+
+  // Place the scoped main session directly after Current time so it is never clipped.
+  if (input.live.scopedThread) {
+    const scoped = input.live.scopedThread;
+    const metaLines: string[] = [
+      `## ACTIVE MAIN SESSION (Current Thread on Screen)`,
+      `Thread: ${scoped.title} (Project: ${scoped.projectTitle}, Status: ${scoped.status})`,
+    ];
+    if (scoped.branch) {
+      metaLines.push(`Branch: ${scoped.branch}`);
+    }
+    if (scoped.worktreePath) {
+      metaLines.push(`Worktree: ${scoped.worktreePath}`);
+    }
+    if (scoped.pendingRequests.length > 0) {
+      metaLines.push(
+        `Pending approvals/inputs: ${scoped.pendingRequests.map((req) => `${req.kind} (${req.id})`).join(", ")}`,
+      );
+    }
+    if (scoped.recentActivity.length > 0) {
+      metaLines.push("Recent main-session work activity:");
+      for (const item of scoped.recentActivity.slice(-10)) {
+        metaLines.push(`- ${item}`);
+      }
+    }
+    const messages = scoped.recentMessages.slice(-16);
+    if (messages.length > 0) {
+      metaLines.push("Recent main-session dialogue:");
+      const recentStartIndex = Math.max(0, messages.length - 6);
+      for (let i = 0; i < messages.length; i += 1) {
+        const msg = messages[i]!;
+        const limit = i >= recentStartIndex ? 1_200 : 450;
+        const compact = msg.text.replace(/\s+/g, " ").trim().slice(0, limit);
+        metaLines.push(`${msg.role}: ${compact}`);
+      }
+    }
+    parts.push(metaLines.join("\n"));
   }
 
   parts.push("## Live Browne State");
@@ -353,20 +498,15 @@ export function buildVoiceBriefing(input: {
     }
   }
 
-  if (input.live.scopedThread) {
-    parts.push(
-      `## Current Thread Context: ${input.live.scopedThread.title} (${input.live.scopedThread.projectTitle})`,
-    );
-    for (const msg of input.live.scopedThread.recentMessages.slice(-6)) {
-      const compact = msg.text.replace(/\s+/g, " ").trim().slice(0, 320);
-      parts.push(`${msg.role}: ${compact}`);
-    }
-  }
-
   parts.push(
     `## Planner Digest (journal, fetched ${input.external.planStatus.fetchedAt}, status: ${input.external.planStatus.status})`,
   );
   parts.push(input.external.planSummary);
+
+  parts.push(
+    `## Active Fleet Context (Messages, Calendar, Calls, Briefs, fetched ${input.external.fleetStatus.fetchedAt}, status: ${input.external.fleetStatus.status})`,
+  );
+  parts.push(input.external.fleetDigest);
 
   parts.push(
     `## Recent Mail Headlines (maxbook Postroom, fetched ${input.external.mailStatus.fetchedAt}, status: ${input.external.mailStatus.status})`,
@@ -399,14 +539,21 @@ export class VoiceContextCache extends Context.Service<
         planStatus: { status: "empty", fetchedAt: formatNyTime() },
         mailSummary: "Loading recent mail...",
         mailStatus: { status: "empty", fetchedAt: formatNyTime() },
+        fleetDigest: "Loading active Fleet context...",
+        fleetStatus: { status: "empty", fetchedAt: formatNyTime() },
         wikiSummary: "Loading wiki highlights...",
         wikiStatus: { status: "empty", fetchedAt: formatNyTime() },
       };
       const snapshotRef = yield* Ref.make(initial);
 
       const refreshNow = Effect.gen(function* () {
-        const [plan, mail, wiki] = yield* Effect.promise(() =>
-          Promise.all([fetchPlanDigest(), fetchMailDigest(), fetchWikiDigest()]),
+        const [plan, mail, fleet, wiki] = yield* Effect.promise(() =>
+          Promise.all([
+            fetchPlanDigest(),
+            fetchMailDigest(),
+            fetchActiveFleetDigest(),
+            fetchWikiDigest(),
+          ]),
         );
         const next: CachedExternalSnapshot = {
           builtAt: new Date().toISOString(),
@@ -414,6 +561,8 @@ export class VoiceContextCache extends Context.Service<
           planStatus: plan.status,
           mailSummary: mail.summary,
           mailStatus: mail.status,
+          fleetDigest: fleet.summary,
+          fleetStatus: fleet.status,
           wikiSummary: wiki.summary,
           wikiStatus: wiki.status,
         };

@@ -139,6 +139,8 @@ it.live(
           planStatus: { status: "ok", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
           mailSummary: "No unread mail",
           mailStatus: { status: "ok", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
+          fleetDigest: "No recent alerts",
+          fleetStatus: { status: "ok", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
           wikiSummary: "Wiki ok",
           wikiStatus: { status: "ok", fetchedAt: "Thu, Nov 26, 2026, 10:00" },
         }),
@@ -260,6 +262,12 @@ it.live(
           activeCallbacks?.onUserInterrupted();
           const interrupt = await client1.nextEvent();
           expect(interrupt).toMatchObject({ type: "interrupt", turnId: 3 });
+          expect(await client1.nextEvent()).toMatchObject({ type: "phase", phase: "listening" });
+
+          // Client explicit interrupt_assistant drops pending turn audio and resets phase
+          client1.socket.send(JSON.stringify({ type: "interrupt_assistant" }));
+          const clientInterrupt = await client1.nextEvent();
+          expect(clientInterrupt).toMatchObject({ type: "interrupt", turnId: 4 });
           expect(await client1.nextEvent()).toMatchObject({ type: "phase", phase: "listening" });
 
           // Tool call emits running & done cards and posts output back to provider

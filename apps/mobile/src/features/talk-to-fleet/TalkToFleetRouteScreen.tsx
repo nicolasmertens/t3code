@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { useGT } from "gt-react-native";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -57,17 +57,41 @@ export function TalkToFleetRouteScreen() {
     toggleSpeaker,
     toggleCaptions,
     respondApproval,
+    interruptAssistant,
   } = useTalkToFleet();
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Starts the external native audio/WebSocket call session when Talk to Fleet opens.
+  const targetEnvironmentId = params.environmentId
+    ? EnvironmentId.make(params.environmentId)
+    : undefined;
+  const startKey = `${params.environmentId ?? ""}:${params.threadId ?? ""}`;
+  const autoStartedKeyRef = useRef<string | null>(null);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Starts the external native audio/WebSocket call session once when Talk to Fleet opens.
   useEffect(() => {
-    if (isNativeSupported && (state.phase === "idle" || state.phase === "ended")) {
-      void start({
-        environmentId: params.environmentId ? EnvironmentId.make(params.environmentId) : undefined,
-        threadId: params.threadId,
-      });
+    if (!isNativeSupported || autoStartedKeyRef.current === startKey) {
+      return;
     }
-  }, [isNativeSupported, params.environmentId, params.threadId, start, state.phase]);
+    const shouldStart =
+      state.phase === "idle" ||
+      state.phase === "ended" ||
+      (typeof params.threadId === "string" && state.scopedThreadId !== params.threadId);
+    if (!shouldStart) {
+      return;
+    }
+    autoStartedKeyRef.current = startKey;
+    void start({
+      environmentId: targetEnvironmentId,
+      threadId: params.threadId,
+    });
+  }, [
+    isNativeSupported,
+    params.threadId,
+    start,
+    startKey,
+    state.phase,
+    state.scopedThreadId,
+    targetEnvironmentId,
+  ]);
 
   const phaseLabel = usePhaseLabel(state.phase);
   const isActive = isTalkToFleetActivePhase(state.phase);
@@ -95,7 +119,9 @@ export function TalkToFleetRouteScreen() {
 
         <View className="items-center">
           <Text className="text-base font-semibold text-foreground">{gt("Talk to Fleet")}</Text>
-          <Text className="text-xs text-foreground-muted">{state.route}</Text>
+          <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+            {state.scopedThreadTitle ? `${state.scopedThreadTitle} · ${state.route}` : state.route}
+          </Text>
         </View>
 
         <Pressable
@@ -153,9 +179,20 @@ export function TalkToFleetRouteScreen() {
         ) : null}
       </View>
 
-      <View className="mt-4">
+      <Pressable
+        accessibilityRole={state.phase === "speaking" ? "button" : undefined}
+        accessibilityLabel={state.phase === "speaking" ? gt("Interrupt assistant") : undefined}
+        disabled={state.phase !== "speaking"}
+        onPress={interruptAssistant}
+        className="mt-4 items-center"
+      >
         <TalkToFleetWaveform audioLevels={audioLevels} phase={state.phase} />
-      </View>
+        {state.phase === "speaking" ? (
+          <Text className="mt-1 text-[11px] font-medium text-foreground-muted">
+            {gt("Tap to interrupt")}
+          </Text>
+        ) : null}
+      </Pressable>
 
       <ScrollView
         className="flex-1 px-4"
@@ -225,100 +262,162 @@ export function TalkToFleetRouteScreen() {
       </ScrollView>
 
       <View className="flex-row items-center justify-evenly border-t border-border px-4 pt-3">
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={state.muted ? gt("Unmute microphone") : gt("Mute microphone")}
-          onPress={toggleMute}
-          disabled={!isActive}
-          className={cn(
-            "items-center justify-center gap-1 rounded-2xl px-4 py-2.5 active:opacity-75",
-            state.muted ? "bg-danger" : "bg-card border border-border",
-            !isActive && "opacity-40",
-          )}
-        >
-          <SymbolView
-            name="mic"
-            size={20}
-            tintColorClassName={state.muted ? "accent-danger-foreground" : "accent-foreground"}
-            type="monochrome"
-          />
-          <Text
-            className={cn(
-              "text-xs font-medium",
-              state.muted ? "text-danger-foreground" : "text-foreground",
-            )}
-          >
-            {state.muted ? gt("Muted") : gt("Mute")}
-          </Text>
-        </Pressable>
+        {state.phase === "ended" && isNativeSupported ? (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={state.showCaptions ? gt("Hide captions") : gt("Show captions")}
+              onPress={toggleCaptions}
+              className={cn(
+                "items-center justify-center gap-1 rounded-2xl border border-border px-4 py-2.5 active:opacity-75",
+                state.showCaptions ? "bg-secondary" : "bg-card",
+              )}
+            >
+              <SymbolView
+                name="text.bubble"
+                size={20}
+                tintColorClassName="accent-foreground"
+                type="monochrome"
+              />
+              <Text className="text-xs font-medium text-foreground">{gt("Captions")}</Text>
+            </Pressable>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={state.speaker ? gt("Use earpiece") : gt("Use speakerphone")}
-          onPress={toggleSpeaker}
-          disabled={!isActive}
-          className={cn(
-            "items-center justify-center gap-1 rounded-2xl border border-border px-4 py-2.5 active:opacity-75",
-            state.speaker ? "bg-primary" : "bg-card",
-            !isActive && "opacity-40",
-          )}
-        >
-          <SymbolView
-            name="headphones"
-            size={20}
-            tintColorClassName={state.speaker ? "accent-primary-foreground" : "accent-foreground"}
-            type="monochrome"
-          />
-          <Text
-            className={cn(
-              "text-xs font-medium",
-              state.speaker ? "text-primary-foreground" : "text-foreground",
-            )}
-          >
-            {gt("Speaker")}
-          </Text>
-        </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={gt("Call again")}
+              onPress={() =>
+                void start({
+                  environmentId: targetEnvironmentId ?? state.environmentId ?? undefined,
+                  threadId: params.threadId ?? state.scopedThreadId ?? undefined,
+                })
+              }
+              className="items-center justify-center gap-1 rounded-2xl bg-primary px-5 py-2.5 active:opacity-80"
+            >
+              <SymbolView
+                name="mic"
+                size={20}
+                tintColorClassName="accent-primary-foreground"
+                type="monochrome"
+              />
+              <Text className="text-xs font-semibold text-primary-foreground">
+                {gt("Call again")}
+              </Text>
+            </Pressable>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={state.showCaptions ? gt("Hide captions") : gt("Show captions")}
-          onPress={toggleCaptions}
-          className={cn(
-            "items-center justify-center gap-1 rounded-2xl border border-border px-4 py-2.5 active:opacity-75",
-            state.showCaptions ? "bg-secondary" : "bg-card",
-          )}
-        >
-          <SymbolView
-            name="text.bubble"
-            size={20}
-            tintColorClassName="accent-foreground"
-            type="monochrome"
-          />
-          <Text className="text-xs font-medium text-foreground">{gt("Captions")}</Text>
-        </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={gt("Close")}
+              onPress={() => navigation.goBack()}
+              className="items-center justify-center gap-1 rounded-2xl border border-border bg-card px-5 py-2.5 active:opacity-80"
+            >
+              <SymbolView
+                name="xmark"
+                size={20}
+                tintColorClassName="accent-foreground"
+                type="monochrome"
+              />
+              <Text className="text-xs font-semibold text-foreground">{gt("Close")}</Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={state.muted ? gt("Unmute microphone") : gt("Mute microphone")}
+              onPress={toggleMute}
+              disabled={!isActive}
+              className={cn(
+                "items-center justify-center gap-1 rounded-2xl px-4 py-2.5 active:opacity-75",
+                state.muted ? "bg-danger" : "bg-card border border-border",
+                !isActive && "opacity-40",
+              )}
+            >
+              <SymbolView
+                name="mic"
+                size={20}
+                tintColorClassName={state.muted ? "accent-danger-foreground" : "accent-foreground"}
+                type="monochrome"
+              />
+              <Text
+                className={cn(
+                  "text-xs font-medium",
+                  state.muted ? "text-danger-foreground" : "text-foreground",
+                )}
+              >
+                {state.muted ? gt("Muted") : gt("Mute")}
+              </Text>
+            </Pressable>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={isActive ? gt("End Talk to Fleet") : gt("Close")}
-          onPress={() => {
-            if (isActive) {
-              hangup();
-            } else {
-              navigation.goBack();
-            }
-          }}
-          className="items-center justify-center gap-1 rounded-2xl bg-danger px-5 py-2.5 active:opacity-80"
-        >
-          <SymbolView
-            name="xmark"
-            size={20}
-            tintColorClassName="accent-danger-foreground"
-            type="monochrome"
-          />
-          <Text className="text-xs font-semibold text-danger-foreground">
-            {isActive ? gt("End") : gt("Close")}
-          </Text>
-        </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={state.speaker ? gt("Use earpiece") : gt("Use speakerphone")}
+              onPress={toggleSpeaker}
+              disabled={!isActive}
+              className={cn(
+                "items-center justify-center gap-1 rounded-2xl border border-border px-4 py-2.5 active:opacity-75",
+                state.speaker ? "bg-primary" : "bg-card",
+                !isActive && "opacity-40",
+              )}
+            >
+              <SymbolView
+                name="headphones"
+                size={20}
+                tintColorClassName={
+                  state.speaker ? "accent-primary-foreground" : "accent-foreground"
+                }
+                type="monochrome"
+              />
+              <Text
+                className={cn(
+                  "text-xs font-medium",
+                  state.speaker ? "text-primary-foreground" : "text-foreground",
+                )}
+              >
+                {gt("Speaker")}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={state.showCaptions ? gt("Hide captions") : gt("Show captions")}
+              onPress={toggleCaptions}
+              className={cn(
+                "items-center justify-center gap-1 rounded-2xl border border-border px-4 py-2.5 active:opacity-75",
+                state.showCaptions ? "bg-secondary" : "bg-card",
+              )}
+            >
+              <SymbolView
+                name="text.bubble"
+                size={20}
+                tintColorClassName="accent-foreground"
+                type="monochrome"
+              />
+              <Text className="text-xs font-medium text-foreground">{gt("Captions")}</Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isActive ? gt("End Talk to Fleet") : gt("Close")}
+              onPress={() => {
+                if (isActive) {
+                  hangup();
+                }
+                navigation.goBack();
+              }}
+              className="items-center justify-center gap-1 rounded-2xl bg-danger px-5 py-2.5 active:opacity-80"
+            >
+              <SymbolView
+                name="xmark"
+                size={20}
+                tintColorClassName="accent-danger-foreground"
+                type="monochrome"
+              />
+              <Text className="text-xs font-semibold text-danger-foreground">
+                {isActive ? gt("End") : gt("Close")}
+              </Text>
+            </Pressable>
+          </>
+        )}
       </View>
     </View>
   );

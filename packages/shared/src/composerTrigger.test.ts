@@ -5,6 +5,7 @@ import { assert, describe, expect, it } from "vite-plus/test";
 import {
   detectComposerTrigger,
   parseSideChatCommand,
+  parseTalkCommand,
   parseXResearchCommand,
   serializeComposerFileLink,
 } from "./composerTrigger.ts";
@@ -205,5 +206,18 @@ describe("parseXResearchCommand", () => {
     expect(parseXResearchCommand("/xml")).toBeNull();
     expect(parseXResearchCommand("/x-research")).toBeNull();
     expect(parseXResearchCommand("foo /x bar")).toBeNull();
+  });
+});
+
+describe("parseTalkCommand", () => {
+  it("matches /talk with optional trailing whitespace or prompt", () => {
+    expect(parseTalkCommand("/talk")).toEqual({ prompt: "" });
+    expect(parseTalkCommand("  /TALK   ")).toEqual({ prompt: "" });
+    expect(parseTalkCommand("/talk check status")).toEqual({ prompt: "check status" });
+  });
+
+  it("ignores other commands and inline mentions", () => {
+    expect(parseTalkCommand("/talking")).toBeNull();
+    expect(parseTalkCommand("let us /talk later")).toBeNull();
   });
 });
