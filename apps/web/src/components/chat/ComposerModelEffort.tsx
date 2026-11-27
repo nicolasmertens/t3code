@@ -804,7 +804,7 @@ function InlineComposerEffortContent(props: {
         <div
           role="radiogroup"
           aria-label={effort.descriptor.label}
-          className="inline-flex items-center rounded-full border border-border/70 bg-muted/60 p-0.5"
+          className="inline-flex items-center rounded-full bg-muted/65 p-0.5"
         >
           {selectableProviderOptionChoices(effort.descriptor).map((option) => (
             <InlineEffortButton
@@ -821,7 +821,7 @@ function InlineComposerEffortContent(props: {
         <div
           role="radiogroup"
           aria-label={effort.descriptor.label}
-          className="inline-flex items-center rounded-full border border-border/70 bg-muted/60 p-0.5"
+          className="inline-flex items-center rounded-full bg-muted/65 p-0.5"
         >
           {([false, true] as const).map((value) => (
             <InlineEffortButton

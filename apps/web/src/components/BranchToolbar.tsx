@@ -117,8 +117,6 @@ interface BranchToolbarProps {
   onComposerFocusRequest?: () => void;
   /** Shown at the end of the composer strip, such as the new thread's permissions. */
   trailing?: ReactNode;
-  /** Bundles context items on the left when the draft model pill strip renders beside them. */
-  bundleLeftWhenDraftPills?: boolean;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
 }
@@ -669,7 +667,6 @@ export const BranchToolbar = memo(function BranchToolbar({
   availableEnvironments,
   onEnvironmentChange,
   trailing,
-  bundleLeftWhenDraftPills = false,
 }: BranchToolbarProps) {
   const m = useMessages();
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
@@ -803,11 +800,7 @@ export const BranchToolbar = memo(function BranchToolbar({
     <ComposerSurface.ContextStrip
       ref={attachStrip}
       data-compact={labelsOverflow ? "" : undefined}
-      className={cn(
-        "gap-1 text-xs font-normal text-foreground/70 dark:text-muted-foreground",
-        bundleLeftWhenDraftPills &&
-          "group-has-data-[draft-model-pill-strip]/draft-bottom:w-auto group-has-data-[draft-model-pill-strip]/draft-bottom:max-w-full group-has-data-[draft-model-pill-strip]/draft-bottom:shrink-0 group-has-data-[draft-model-pill-strip]/draft-bottom:px-1 group-has-data-[draft-model-pill-strip]/draft-bottom:pt-0.5",
-      )}
+      className={cn("gap-1 text-xs font-normal text-foreground/70 dark:text-muted-foreground")}
     >
       {showGitControls ? (
         <div className="contents @xl/composer-surface:hidden">
@@ -839,9 +832,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           className={cn(
             "min-h-7 min-w-10 items-center gap-1 sm:min-h-6",
             showGitControls ? "hidden @xl/composer-surface:flex" : "flex",
-            bundleLeftWhenDraftPills
-              ? "flex-1 group-has-data-[draft-model-pill-strip]/draft-bottom:flex-none"
-              : "flex-1",
+            "flex-1",
           )}
         >
           {showEnvironmentIndicator && availableEnvironments && (
@@ -905,10 +896,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         <BranchToolbarBranchSelector
           forceNewWorktree={forceNewWorktree}
           ref={branchSelectorRef}
-          className={cn(
-            "min-w-0 flex-initial justify-end @xl/composer-surface:ml-auto",
-            bundleLeftWhenDraftPills && "group-has-data-[draft-model-pill-strip]/draft-bottom:ml-0",
-          )}
+          className="min-w-0 flex-initial justify-end @xl/composer-surface:ml-auto"
           environmentId={environmentId}
           threadId={threadId}
           {...(draftId ? { draftId } : {})}
@@ -922,13 +910,6 @@ export const BranchToolbar = memo(function BranchToolbar({
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />
       )}
-      {bundleLeftWhenDraftPills && trailing && (showGitControls || showEnvironmentIndicator) ? (
-        <Separator
-          orientation="vertical"
-          className="mx-0.5 hidden h-3.5! group-has-data-[draft-model-pill-strip]/draft-bottom:block"
-          data-composer-context-control
-        />
-      ) : null}
       {trailing}
     </ComposerSurface.ContextStrip>
   );

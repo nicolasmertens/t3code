@@ -359,7 +359,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         openTarget(target);
       }}
       className={cn(
-        "inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-full border border-dashed border-border/90 bg-transparent px-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap outline-none transition-[background-color,border-color,color] hover:border-solid hover:border-foreground/25 hover:bg-accent/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60 data-popup-open:border-solid data-popup-open:border-foreground/25 data-popup-open:bg-accent data-popup-open:text-foreground",
+        "inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-full border border-transparent bg-transparent px-2 text-xs font-normal text-muted-foreground/75 whitespace-nowrap outline-none transition-[background-color,color] hover:bg-muted/75 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60 data-popup-open:bg-muted data-popup-open:text-foreground",
         props.triggerClassName,
       )}
       disabled={props.disabled}

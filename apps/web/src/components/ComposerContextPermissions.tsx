@@ -22,7 +22,6 @@ export function ComposerContextPermissions(props: {
   runtimeMode: RuntimeMode;
   supportedRuntimeModes: ReadonlyArray<RuntimeMode> | undefined;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
-  className?: string | undefined;
 }) {
   const gt = useGT();
   const messages = useMessages();
@@ -47,7 +46,7 @@ export function ComposerContextPermissions(props: {
               render={
                 <ComposerControl
                   size="xs"
-                  className={props.className ?? "ms-auto min-w-0 shrink-0"}
+                  className="ms-auto min-w-0 shrink-0"
                   aria-label={gt("Permissions: {label}", { label })}
                   data-composer-context-control
                 />

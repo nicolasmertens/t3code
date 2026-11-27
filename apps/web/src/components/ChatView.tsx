@@ -3990,14 +3990,7 @@ export default function ChatView(props: ChatViewProps) {
                             className="relative z-0"
                           >
                             {showComposerContextStrip && (
-                              <div
-                                data-draft-composer-bottom={isDraftHeroState ? "true" : undefined}
-                                className={cn(
-                                  "pointer-events-auto",
-                                  isDraftHeroState &&
-                                    "group/draft-bottom has-data-[draft-model-pill-strip]:flex has-data-[draft-model-pill-strip]:flex-wrap has-data-[draft-model-pill-strip]:items-start has-data-[draft-model-pill-strip]:justify-between has-data-[draft-model-pill-strip]:gap-x-3 has-data-[draft-model-pill-strip]:gap-y-2 has-data-[draft-model-pill-strip]:px-1 has-data-[draft-model-pill-strip]:pt-2",
-                                )}
-                              >
+                              <div className="pointer-events-auto">
                                 <BranchToolbar
                                   forceNewWorktree={multipleModelSelections !== null}
                                   ref={branchToolbarRef}
@@ -4008,7 +4001,6 @@ export default function ChatView(props: ChatViewProps) {
                                   isServerThread={isServerThread}
                                   showGitControls={workspaceModesOffered}
                                   showBranchControls={isGitRepo}
-                                  bundleLeftWhenDraftPills={isDraftHeroState}
                                   {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                   onEnvModeChange={onEnvModeChangeStable}
                                   startFromOrigin={startFromOrigin}
@@ -4050,24 +4042,19 @@ export default function ChatView(props: ChatViewProps) {
                                               activeProviderStatus?.supportedRuntimeModes
                                             }
                                             onRuntimeModeChange={handleRuntimeModeChangeStable}
-                                            className={
-                                              isDraftHeroState
-                                                ? "ms-auto min-w-0 shrink-0 group-has-data-[draft-model-pill-strip]/draft-bottom:ms-0"
-                                                : undefined
-                                            }
                                           />
                                         ),
                                       })}
                                 />
-                                {isDraftHeroState ? (
-                                  <div
-                                    ref={setDraftModelStripHost}
-                                    data-draft-model-strip-host="true"
-                                    className="ms-auto flex min-w-0 flex-1 items-center justify-end empty:hidden"
-                                  />
-                                ) : null}
                               </div>
                             )}
+                            {isDraftHeroState ? (
+                              <div
+                                ref={setDraftModelStripHost}
+                                data-draft-model-strip-host="true"
+                                className="pointer-events-auto pt-3 empty:hidden"
+                              />
+                            ) : null}
                           </div>
                         </div>
                       </ComposerSurface.Shell>

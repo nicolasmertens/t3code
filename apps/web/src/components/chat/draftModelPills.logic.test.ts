@@ -203,4 +203,53 @@ describe("resolveDraftModelPills", () => {
 
     expect(lockedPills.map((pill) => pill.model)).toEqual(["claude-opus-5-5"]);
   });
+
+  it("attaches a short provider disambiguation tag when two providers share a long model prefix", () => {
+    const opencodeDriver = ProviderDriverKind.make("opencode");
+    const refuseless = makeEntry({
+      instanceId: "opencode_refuseless",
+      driverKind: opencodeDriver,
+      displayName: "Refuseless · DS1017",
+      models: [
+        {
+          slug: "refuseless/deepseek-v4.1-flash-fast",
+          name: "DeepSeek V4.1 Flash 1017",
+        },
+      ],
+    });
+    const venice = makeEntry({
+      instanceId: "opencode_venice",
+      driverKind: opencodeDriver,
+      displayName: "Venice · DS1017 Uncensored",
+      models: [
+        {
+          slug: "venice/deepseek-v4-1-flash-1017-uncensored",
+          name: "DeepSeek V4.1 Flash 1017 Uncensored",
+        },
+      ],
+    });
+    const allEntries = [...entries, refuseless, venice];
+    const allModels = new Map<ProviderInstanceId, ReadonlyArray<ModelEsque>>(
+      allEntries.map((entry) => [entry.instanceId, entry.models]),
+    );
+
+    const pills = resolveDraftModelPills({
+      favorites: [
+        { provider: refuseless.instanceId, model: "refuseless/deepseek-v4.1-flash-fast" },
+        { provider: venice.instanceId, model: "venice/deepseek-v4-1-flash-1017-uncensored" },
+        { provider: claude.instanceId, model: "claude-opus-5-5" },
+      ],
+      instanceEntries: allEntries,
+      modelOptionsByInstance: allModels,
+      activeInstanceId: claude.instanceId,
+      activeModel: "claude-opus-5-5",
+      lockedProvider: null,
+    });
+
+    expect(pills.map((pill) => [pill.label, pill.disambiguationLabel])).toEqual([
+      ["DeepSeek V4.1 Flash 1017", "Refuseless"],
+      ["DeepSeek V4.1 Flash 1017 Uncensored", "Venice"],
+      ["Opus 5.5", undefined],
+    ]);
+  });
 });

@@ -23,6 +23,7 @@ export interface DraftModelPillItem {
   readonly driverKind: ProviderDriverKind;
   readonly model: string;
   readonly label: string;
+  readonly disambiguationLabel?: string | undefined;
   readonly fullLabel: string;
   readonly providerDisplayName: string;
   readonly providerAccentColor?: string | undefined;
@@ -106,6 +107,38 @@ function buildPillItem(input: {
     isFavorite: input.isFavorite,
     isUnavailable: option.isUnavailable === true,
   };
+}
+
+const DISAMBIGUATION_PREFIX_LENGTH = 16;
+
+function labelCollisionKey(label: string): string {
+  return label.trim().toLowerCase().slice(0, DISAMBIGUATION_PREFIX_LENGTH);
+}
+
+function shortProviderTag(displayName: string): string {
+  return displayName.split("·")[0]?.trim() || displayName.trim();
+}
+
+function attachDisambiguationLabels(
+  pills: ReadonlyArray<DraftModelPillItem>,
+): ReadonlyArray<DraftModelPillItem> {
+  const instancesByPrefix = new Map<string, Set<ProviderInstanceId>>();
+  for (const pill of pills) {
+    const key = labelCollisionKey(pill.label);
+    let instances = instancesByPrefix.get(key);
+    if (!instances) {
+      instances = new Set();
+      instancesByPrefix.set(key, instances);
+    }
+    instances.add(pill.instanceId);
+  }
+  return pills.map((pill) => {
+    const instances = instancesByPrefix.get(labelCollisionKey(pill.label));
+    if (!instances || instances.size < 2) return pill;
+    const tag = shortProviderTag(pill.providerDisplayName);
+    if (!tag || pill.label.toLowerCase().includes(tag.toLowerCase())) return pill;
+    return { ...pill, disambiguationLabel: tag };
+  });
 }
 
 /**
@@ -196,5 +229,5 @@ export function resolveDraftModelPills(
     );
   }
 
-  return [...prependedNonFavorites, ...favoritePills];
+  return attachDisambiguationLabels([...prependedNonFavorites, ...favoritePills]);
 }
