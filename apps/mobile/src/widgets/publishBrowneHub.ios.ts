@@ -7,7 +7,7 @@ import {
   type BrowneHubSnapshot,
 } from "./browneHubSnapshot";
 
-const MAX_QUIET_INTERVAL_MS = 5 * 60_000;
+const MAX_QUIET_INTERVAL_MS = 60_000;
 
 let lastFingerprint: string | null = null;
 let lastPublishedAtMs = 0;
@@ -29,8 +29,12 @@ export async function publishBrowneHub(
 
   const { default: widget } = await import("./BrowneHubWidget");
   if (optionsChanged) {
-    lastProjectOptionsJson = optionsJson;
-    widget.setConfigurationParameterEnum("projectKey", [...projectOptions]);
+    try {
+      widget.setConfigurationParameterEnum("projectKey", [...projectOptions]);
+      lastProjectOptionsJson = optionsJson;
+    } catch (error: unknown) {
+      console.warn("Could not update BrowneHub project options", error);
+    }
   }
   if (snapshotChanged) {
     lastFingerprint = fingerprint;

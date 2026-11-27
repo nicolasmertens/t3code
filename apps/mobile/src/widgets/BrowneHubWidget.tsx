@@ -142,6 +142,7 @@ export function BrowneHubWidget(
   const scopedUrgent = (props.urgentTopics ?? []).filter(scopeFilter);
   const scopedRunning = (props.runningTopics ?? []).filter(scopeFilter);
   const scopedLatest = (props.latestTopics ?? []).filter(scopeFilter);
+  const scopedActive = [...scopedUrgent, ...scopedRunning];
   const fleetItems = props.fleetItems ?? [];
 
   const stats = props.stats;
@@ -285,11 +286,32 @@ export function BrowneHubWidget(
     ...(wholeWidgetLink ? [widgetURL(wholeWidgetLink)] : []),
   ];
 
-  const renderMark = (height: number) => (
-    <HStack modifiers={[frame({ width: height * 1.45, height }), foregroundStyle(primaryFg)]}>
-      <Image assetName="T3Mark" modifiers={[resizable()]} />
-    </HStack>
-  );
+  const renderMark = (height: number) =>
+    monochrome || accessory ? (
+      <HStack modifiers={[frame({ width: height * 0.77, height }), foregroundStyle(primaryFg)]}>
+        <Image assetName="BrowneMark" modifiers={[resizable()]} />
+      </HStack>
+    ) : (
+      <HStack
+        alignment="center"
+        modifiers={[
+          frame({ width: height + 4, height: height + 4, alignment: "center" }),
+          background(
+            "#18100b",
+            shapes.roundedRectangle({ cornerRadius: 4.5, roundedCornerStyle: "continuous" }),
+          ),
+        ]}
+      >
+        <HStack
+          modifiers={[
+            frame({ width: (height - 2) * 0.77, height: height - 2 }),
+            foregroundStyle("#f7f2ea"),
+          ]}
+        >
+          <Image assetName="BrowneMark" modifiers={[resizable()]} />
+        </HStack>
+      </HStack>
+    );
 
   const renderStatTile = (value: string, label: string, accent?: Foreground) => (
     <VStack
@@ -721,7 +743,7 @@ export function BrowneHubWidget(
         : quotaPercent !== null
           ? quotaLabelText
           : urgentLabelText;
-      const rows = viewMode === "running" ? scopedRunning.slice(0, 3) : scopedLatest.slice(0, 2);
+      const rows = viewMode === "running" ? scopedActive.slice(0, 3) : scopedLatest.slice(0, 2);
 
       return (
         <VStack alignment="leading" spacing={7} modifiers={rootModifiers}>
@@ -747,6 +769,19 @@ export function BrowneHubWidget(
                 ]}
               >
                 {hostsUpLabel}
+              </Text>
+            ) : null}
+            {viewMode === "running" && scopedActive.length > 0 ? (
+              <Text
+                modifiers={[
+                  font({ weight: "semibold", size: 10 }),
+                  foregroundStyle(scopedUrgent.length > 0 ? urgentTint : inputTint),
+                  padding({ horizontal: 7, vertical: 3 }),
+                  background(subtleBg, shapes.capsule({ roundedCornerStyle: "continuous" })),
+                  lineLimit(1),
+                ]}
+              >
+                {`${scopedActive.length} ${activeWordText}`}
               </Text>
             ) : null}
             {renderIconLink("browne://talk-to-fleet", "waveform", false)}
@@ -781,13 +816,50 @@ export function BrowneHubWidget(
                 renderTopicRow(row, true, viewMode === "running" && !pinnedProject),
               )}
             </VStack>
+          ) : viewMode === "running" ? (
+            !hasPublishedData ? (
+              <Text modifiers={[font({ size: 11.5 }), foregroundStyle(secondaryFg), lineLimit(2)]}>
+                {openToSyncText}
+              </Text>
+            ) : scopedLatest.length > 0 ? (
+              <VStack alignment="leading" spacing={5}>
+                <Text
+                  modifiers={[font({ size: 10.5 }), foregroundStyle(secondaryFg), lineLimit(1)]}
+                >
+                  {doneTodayCount > 0
+                    ? `${noRunningText} · ${doneTodayCount} ${doneTodayLabelText.toLowerCase()}`
+                    : noRunningText}
+                </Text>
+                {scopedLatest.slice(0, 2).map((row) => renderTopicRow(row, true, !pinnedProject))}
+              </VStack>
+            ) : (
+              <VStack alignment="leading" spacing={7}>
+                <Text
+                  modifiers={[font({ size: 11.5 }), foregroundStyle(secondaryFg), lineLimit(1)]}
+                >
+                  {noRunningText}
+                </Text>
+                <HStack spacing={6}>
+                  {renderActionPill(
+                    "browne://talk-to-fleet",
+                    "waveform",
+                    talkText,
+                    "primary",
+                    true,
+                  )}
+                  {renderActionPill(
+                    "browne://new/scratch",
+                    "square.and.pencil",
+                    quickTaskText,
+                    "secondary",
+                    true,
+                  )}
+                </HStack>
+              </VStack>
+            )
           ) : (
             <Text modifiers={[font({ size: 11.5 }), foregroundStyle(secondaryFg), lineLimit(2)]}>
-              {viewMode === "running"
-                ? noRunningText
-                : hasPublishedData
-                  ? noTopicsText
-                  : openToSyncText}
+              {hasPublishedData ? noTopicsText : openToSyncText}
             </Text>
           )}
           <Spacer minLength={0} />
@@ -970,7 +1042,7 @@ export function BrowneHubWidget(
       : urgentLabelText;
   const activeTopicsForLarge =
     activeTab === "running"
-      ? scopedRunning.slice(0, 4)
+      ? scopedActive.slice(0, 4)
       : activeTab === "projects" && activeProjectSlide
         ? activeProjectSlide.topics.slice(0, 3)
         : scopedLatest.slice(0, allowInteractiveTabs ? 3 : 4);
@@ -1141,13 +1213,13 @@ export function BrowneHubWidget(
         </VStack>
       ) : (
         <Text modifiers={[font({ size: 11.5 }), foregroundStyle(secondaryFg), lineLimit(2)]}>
-          {activeTab === "running"
-            ? noRunningText
-            : activeTab === "projects"
-              ? allProjectsText
-              : hasPublishedData
-                ? noTopicsText
-                : openToSyncText}
+          {!hasPublishedData
+            ? openToSyncText
+            : activeTab === "running"
+              ? noRunningText
+              : activeTab === "projects"
+                ? allProjectsText
+                : noTopicsText}
         </Text>
       )}
 

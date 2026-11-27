@@ -1,5 +1,5 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadShellFixture } from "../test-fixtures";
@@ -335,5 +335,56 @@ describe("browneHubSnapshot", () => {
       [NOW_MS, false],
       [NOW_MS + BROWNE_HUB_STALE_AFTER_MS, true],
     ]);
+  });
+
+  it("treats pending background tasks and uncompleted active runs as running agents", () => {
+    const projects = [makeProject({ id: PROJ_A, title: "Browne" })];
+    const backgroundWork = makeThreadShellFixture({
+      environmentId: ENV_1,
+      id: ThreadId.make("t-bg"),
+      projectId: PROJ_A,
+      title: "Background subagent",
+      pendingBackgroundTasks: [{ taskId: "bg-1", kind: "command", description: "vitest" }],
+      runtime: {
+        status: "idle",
+        activeRunId: null,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerName: null,
+        lastError: null,
+        lastErrorClass: null,
+        lastErrorCode: null,
+        usageLimitResetAt: null,
+        updatedAt: "2026-11-26T13:58:00.000Z",
+      },
+    });
+    const uncompletedRun = makeThreadShellFixture({
+      environmentId: ENV_1,
+      id: ThreadId.make("t-latest-run"),
+      projectId: PROJ_A,
+      title: "In-flight run",
+      runtime: null,
+      latestRun: {
+        runId: RunId.make("run-1"),
+        status: "running",
+        requestedAt: "2026-11-26T13:59:00.000Z",
+        startedAt: "2026-11-26T13:59:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      updatedAt: "2026-11-26T13:59:01.000Z",
+    });
+
+    const snapshot = buildBrowneHubSnapshot({
+      threads: [backgroundWork, uncompletedRun],
+      projects,
+      environmentLabelsById: new Map([[ENV_1, "agents"]]),
+      savedEnvironmentIds: new Set([ENV_1]),
+      connectedEnvCount: 1,
+      totalEnvCount: 1,
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.stats.runningCount).toBe(2);
+    expect(snapshot.runningTopics.map((topic) => topic.threadId)).toEqual(["t-latest-run", "t-bg"]);
   });
 });

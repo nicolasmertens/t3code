@@ -238,11 +238,21 @@ function urgentRankForStatus(
   }
 }
 
+const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running", "waiting"]);
+
 function isActivelyRunningStatus(
   status: ThreadListV2Status,
   thread: EnvironmentThreadShell,
 ): boolean {
   if (status === "working") return true;
+  if (thread.pendingBackgroundTasks.length > 0) return true;
+  if (
+    thread.latestRun !== null &&
+    thread.latestRun.completedAt === null &&
+    ACTIVE_RUN_STATUSES.has(thread.latestRun.status)
+  ) {
+    return true;
+  }
   if (status === "waiting") {
     return (
       thread.blockedOnThreadWait === true ||

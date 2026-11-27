@@ -67,6 +67,18 @@ export function BrowneHubCoordinator() {
       resolve,
     ),
   );
+  const [foregroundTick, setForegroundTick] = useState(0);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refreshes BrowneHub timeline on foreground transitions even if atoms did not emit
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        setForegroundTick((count) => count + 1);
+      }
+    });
+    return () => subscription.remove();
+  }, []);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refreshes optional Fleet/Mail summary asynchronously on connect, resume, and interval
   useEffect(() => {
@@ -150,6 +162,8 @@ export function BrowneHubCoordinator() {
     fleetSummary,
     themeMode,
     themeVariablesByAppearance,
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- foreground resumes refresh the widget timeline even when thread atoms did not change
+    foregroundTick,
     resolve,
   ]);
 
